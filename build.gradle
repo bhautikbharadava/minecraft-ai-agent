@@ -1,0 +1,21 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'dev.minecraftai'
+version = '0.2.0'
+
+application {
+    mainClass = 'dev.minecraftai.agent.AgentCli'
+}
+
+tasks.register('validateAgentCommands', JavaExec) {
+    group = 'verification'
+    description = 'Runs smoke checks for agent command handling.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'dev.minecraftai.agent.AgentCli'
+    args 'validate'
+}
+
+check.dependsOn tasks.named('validateAgentCommands')
