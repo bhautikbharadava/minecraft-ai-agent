@@ -3,7 +3,7 @@ package com.bhautik.mcagent.planner;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
-import com.bhautik.mcagent.item.MineableItems;
+import com.bhautik.mcagent.item.DirectAcquisitions;
 
 import java.util.List;
 import java.util.Optional;
@@ -31,7 +31,7 @@ public final class Planner {
         if (missing <= 0) {
             return List.of();
         }
-        Optional<String> sourceBlock = MineableItems.sourceBlockFor(itemId);
+        Optional<String> sourceBlock = DirectAcquisitions.sourceBlockFor(itemId);
         if (sourceBlock.isEmpty()) {
             return List.of();
         }

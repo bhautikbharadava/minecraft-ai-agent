@@ -20,6 +20,11 @@ Implemented:
 - **First execution (M3):** get-item goals are planned into `MineAction`s
   and executed through the Baritone integration layer, with inventory
   monitored live every second and verified independently before SUCCESS.
+- **General direct acquisition (M4):** every real vanilla item resolves
+  by name; ~60 directly-mineable/gatherable items have curated source
+  blocks (ores + deepslate, wood family, plants); tool-tier gating fails
+  fast (e.g. diamonds without an iron pickaxe) instead of mining blocks
+  that would drop nothing.
 
 Not implemented yet: crafting, smelting, survival interruptions,
 exploration goals, LLM integration, or farms.
@@ -42,10 +47,20 @@ swapped for any navigation backend.
 /agent cancel                 cancel the active goal and stop mining
 ```
 
-Items resolve by shorthand name (for example `cobblestone`). If the
-inventory already satisfies the request, the goal succeeds immediately;
-otherwise the agent plans mining, tracks inventory progress, retries once
-on stall, and verifies the final count before reporting SUCCESS.
+Items resolve against the live vanilla registry (`diamond`,
+`deepslate_diamond_ore`, `sweet_berries`, …). If inventory already
+satisfies the request, the goal succeeds immediately. Otherwise:
+
+```text
+directly acquirable? ──no──► FAILED "no supported acquisition strategy"
+       ↓ yes (+ tool check)
+tool tier available? ──no──► FAILED "requires iron pickaxe or better"
+       ↓ yes
+Baritone mines → live progress → verified count → SUCCESS / FAILED
+```
+
+Smelted/crafted goods (e.g. `iron_ingot`) resolve but fail honestly
+until the smelting milestone lands.
 
 ## Versions
 
