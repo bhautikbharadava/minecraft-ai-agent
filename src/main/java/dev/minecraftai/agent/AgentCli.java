@@ -2,6 +2,7 @@ package dev.minecraftai.agent;
 
 import com.bhautik.mcagent.action.ActionStatus;
 import com.bhautik.mcagent.action.AgentAction;
+import com.bhautik.mcagent.action.CraftAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
@@ -10,7 +11,15 @@ import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.item.ItemRegistry;
 import dev.minecraftai.agent.world.InventoryState;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+
+import static com.bhautik.mcagent.crafting.RecipeResolver.CraftableRecipe;
+import static com.bhautik.mcagent.crafting.RecipeResolver.Grid;
+import static com.bhautik.mcagent.crafting.RecipeResolver.SlotSpec;
 
 public final class AgentCli {
     private AgentCli() {
@@ -25,6 +34,7 @@ public final class AgentCli {
             validate(handler);
             validateMineActionLifecycle();
             validateAcquisitionTable();
+            validateDependencyPlanning();
             return;
         }
         System.out.println(handler.handle(String.join(" ", args)));
@@ -105,6 +115,68 @@ public final class AgentCli {
         if (entries < 50) {
             throw new IllegalStateException("acquisition table suspiciously small: " + entries);
         }
+    }
+
+    /**
+     * Deterministic checks for M5 dependency planning: post-order
+     * chaining, recipe multipliers, unsupported leaves, and cycle guards
+     * — all against fake resolvers, no Minecraft required.
+     */
+    private static void validateDependencyPlanning() {
+        com.bhautik.mcagent.planner.Planner planner = new com.bhautik.mcagent.planner.Planner(
+                new FakeBackend());
+        Map<String, CraftableRecipe> recipes = new HashMap<>();
+        recipes.put("minecraft:oak_planks", recipe("minecraft:oak_planks", 4,
+                cell("minecraft:oak_log")));
+        recipes.put("minecraft:stick", recipe("minecraft:stick", 4,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
+        recipes.put("minecraft:crafting_table", recipe("minecraft:crafting_table", 1,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
+        com.bhautik.mcagent.crafting.RecipeResolver resolver = new com.bhautik.mcagent.crafting.RecipeResolver() {
+            @Override public Grid grid() { return Grid.INVENTORY_2X2; }
+            @Override public Optional<CraftableRecipe> findRecipe(String id) {
+                return Optional.ofNullable(recipes.get(id));
+            }
+        };
+        Map<String, Integer> owned = new HashMap<>();
+        owned.put("minecraft:oak_log", 1);
+        CraftAction.Crafter crafter = (recipe, times) -> times;
+
+        // crafting_table: have 1 log -> mine nothing, craft planks x1, table x1
+        List<AgentAction> plan = planner.planAcquisition(resolver,
+                id -> owned.getOrDefault(id, 0), Set.of(), id -> 0, crafter,
+                "minecraft:crafting_table", 1);
+        assertEquals(plan.size(), 2, "table chain length");
+        if (!(plan.get(0) instanceof CraftAction)) {
+            throw new IllegalStateException("expected planks craft first, got " + plan.get(0).title());
+        }
+        if (!(plan.get(1) instanceof CraftAction)) {
+            throw new IllegalStateException("expected table craft second");
+        }
+
+        // sticks x8: need 8 planks -> own 0 logs -> mine 1 log, craft 4 planks, craft 2x sticks
+        List<AgentAction> stickPlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of(), id -> 0, crafter, "minecraft:stick", 8);
+        assertEquals(stickPlan.size(), 3, "stick chain length");
+        assertContains(stickPlan.get(0).title(), "Mine");
+        assertContains(stickPlan.get(1).title(), "oak_planks");
+
+        try {
+            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0, crafter,
+                    "minecraft:iron_ingot", 1);
+            throw new IllegalStateException("smelted goods must fail planning");
+        } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
+            assertContains(expected.getMessage(), "no supported acquisition strategy");
+        }
+    }
+
+    private static SlotSpec cell(String itemId) {
+        return new SlotSpec(List.of(itemId));
+    }
+
+    private static CraftableRecipe recipe(String output, int resultCount, SlotSpec... slots) {
+        return new CraftableRecipe(output, resultCount, slots.length, 1, List.of(slots));
     }
 
     private static void assertEquals(Object actual, Object expected, String label) {

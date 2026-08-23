@@ -2,8 +2,9 @@ package com.bhautik.mcagent.goal;
 
 import com.bhautik.mcagent.McAgent;
 import com.bhautik.mcagent.action.AgentAction;
+import com.bhautik.mcagent.crafting.VanillaCraftingExecutor;
+import com.bhautik.mcagent.crafting.VanillaRecipeResolver;
 import com.bhautik.mcagent.executor.AgentExecutor;
-import com.bhautik.mcagent.item.DirectAcquisitions;
 import com.bhautik.mcagent.state.InventoryState;
 import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.goal.GetItemGoal;
@@ -16,6 +17,8 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -79,7 +82,7 @@ public final class GoalService {
             }
             run = new ActiveRun(goal, item, player.getUUID(), requestedCount,
                     snapshot, player.level().getServer());
-            if (!launchNextAction()) {
+            if (!replan(run)) {
                 return finishWithFailure(run);
             }
             // A missing navigation backend fails synchronously; surface it now
@@ -152,20 +155,22 @@ public final class GoalService {
             case FAILED -> {
                 McAgent.LOGGER.warn("[Recovery] Action failed: {} ({})",
                         finished.title(), finished.failureReason());
-                if (activeRun.attempts < MAX_PLAN_ATTEMPTS && launchNextAction()) {
+                if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
                     McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
                 } else {
                     finishWithFailure(activeRun);
                 }
             }
             default -> {
-                // Backend finished; verify against reality before declaring success.
+                // Step finished; advance the plan or verify against reality.
                 if (current >= activeRun.requested) {
                     activeRun.goal.markSuccess();
                     McAgent.LOGGER.info("[Agent] Goal completed: {}",
                             activeRun.goal.title());
                     run = null;
-                } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && launchNextAction()) {
+                } else if (!activeRun.queue.isEmpty() && launchNextAction()) {
+                    McAgent.LOGGER.info("[Planner] Advancing plan: {}", executor.currentTitle());
+                } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
                     McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
                 } else {
                     activeRun.goal.markFailed(
@@ -177,26 +182,24 @@ public final class GoalService {
         }
     }
 
-    private boolean launchNextAction() {
-        ActiveRun activeRun = run;
-        if (activeRun == null) {
-            return false;
-        }
-        List<AgentAction> actions = activeRun.goal.status() == GoalStatus.ACTIVE
-                ? planFor(activeRun)
-                : List.of();
+    /** Plans from scratch and fills the run's action queue. */
+    private boolean replan(ActiveRun activeRun) {
+        List<AgentAction> actions = planFor(activeRun);
         if (actions.isEmpty()) {
             return false;
         }
         activeRun.attempts++;
-        boolean launched = false;
-        for (AgentAction action : actions) {
-            if (executor.launch(action)) {
-                launched = true;
-                break;
-            }
+        activeRun.queue.clear();
+        activeRun.queue.addAll(actions);
+        return launchNextAction();
+    }
+
+    private boolean launchNextAction() {
+        ActiveRun activeRun = run;
+        if (activeRun == null || activeRun.queue.isEmpty()) {
+            return false;
         }
-        return launched;
+        return executor.launch(activeRun.queue.poll());
     }
 
     private List<AgentAction> planFor(ActiveRun activeRun) {
@@ -206,25 +209,29 @@ public final class GoalService {
         }
         int current = activeRun.snapshot.count(activeRun.item);
         activeRun.snapshot.setCount(activeRun.item, current);
-        // Tool gate: refuse up front when the source block cannot drop
-        // anything for this player, instead of mining uselessly.
-        String toolReason = DirectAcquisitions.missingToolReason(
-                activeRun.item.id(), InventoryState.collect(player).itemCounts().keySet());
-        if (toolReason != null) {
-            activeRun.goal.markFailed(toolReason);
+        try {
+            var countsNow = InventoryState.collect(player).itemCounts();
+            List<AgentAction> actions = executor.planner().planAcquisition(
+                    new VanillaRecipeResolver(activeRun.server,
+                            com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
+                    id -> countsNow.getOrDefault(id, 0),
+                    countsNow.keySet(),
+                    itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                    VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                    activeRun.item.id(),
+                    activeRun.requested);
+            if (actions.isEmpty()) {
+                activeRun.goal.markFailed(
+                        "no supported acquisition strategy for " + activeRun.item.id());
+            } else {
+                McAgent.LOGGER.info("[Planner] Plan generated: {}",
+                        actions.stream().map(AgentAction::title).toList());
+            }
+            return actions;
+        } catch (com.bhautik.mcagent.planner.Planner.PlanningException planningFailure) {
+            activeRun.goal.markFailed(planningFailure.getMessage());
             return List.of();
         }
-        List<AgentAction> actions = executor.planner().planAcquisition(
-                activeRun.item.id(), current, activeRun.requested,
-                () -> liveCount(activeRun.server, activeRun.playerId, activeRun.item));
-        if (actions.isEmpty()) {
-            activeRun.goal.markFailed(
-                    "no supported acquisition strategy for " + activeRun.item.id());
-        } else {
-            McAgent.LOGGER.info("[Planner] Plan generated: {}",
-                    actions.stream().map(AgentAction::title).toList());
-        }
-        return actions;
     }
 
     private String finishWithFailure(ActiveRun activeRun) {
@@ -257,8 +264,15 @@ public final class GoalService {
     }
 
     private static int liveCount(ServerPlayer player, ActiveRun activeRun) {
-        return InventoryState.collect(player).itemCounts()
-                .getOrDefault(activeRun.item.id(), 0);
+        return liveCountById(player.level().getServer(), player.getUUID(), activeRun.item.id());
+    }
+
+    private static int liveCountById(MinecraftServer server, UUID playerId, String itemId) {
+        ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+        if (player == null) {
+            return 0;
+        }
+        return InventoryState.collect(player).itemCounts().getOrDefault(itemId, 0);
     }
 
     private static int liveCount(MinecraftServer server, UUID playerId, MinecraftItem item) {
@@ -278,6 +292,7 @@ public final class GoalService {
 
     private static final class ActiveRun {
         final GetItemGoal goal;
+        final Deque<AgentAction> queue = new ArrayDeque<>();
         final MinecraftItem item;
         final UUID playerId;
         final int requested;
