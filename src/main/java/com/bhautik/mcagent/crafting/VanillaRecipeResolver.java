@@ -56,7 +56,9 @@ public final class VanillaRecipeResolver implements RecipeResolver {
     }
 
     private Map<String, CraftableRecipe> build() {
-        int maxSide = grid == Grid.CRAFTING_TABLE_3X3 ? 3 : 2;
+        // Index everything up to 3x3 so table-gated outputs get precise
+        // refusal reasons even when this resolver cannot craft them.
+        int maxSide = 3;
         RecipeManager manager = server.getRecipeManager();
         Map<String, CraftableRecipe> built = new HashMap<>();
         for (RecipeHolder<?> holder : manager.getRecipes()) {
@@ -91,10 +93,12 @@ public final class VanillaRecipeResolver implements RecipeResolver {
             if (!resolvable || cells.isEmpty() || cells.stream().allMatch(SlotSpec::isEmpty)) {
                 continue;
             }
+            boolean requiresTable = grid != Grid.CRAFTING_TABLE_3X3
+                    && (definition.width() > 2 || definition.height() > 2);
             CraftableRecipe candidate = new CraftableRecipe(
                     BuiltInRegistries.ITEM.getKey(result.getItem()).toString(),
                     Math.max(1, result.getCount()),
-                    definition.width(), definition.height(), cells);
+                    definition.width(), definition.height(), requiresTable, cells);
             built.merge(candidate.resultItemId(), candidate,
                     (existing, proposed) -> proposed.occupiedSlots().size() < existing.occupiedSlots().size()
                             ? proposed : existing);

@@ -35,6 +35,7 @@ public interface RecipeResolver {
             int resultCount,
             int width,
             int height,
+            boolean requiresTable,
             List<SlotSpec> cells
     ) {
         public CraftableRecipe {

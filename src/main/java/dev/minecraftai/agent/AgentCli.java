@@ -11,6 +11,7 @@ import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.item.ItemRegistry;
 import dev.minecraftai.agent.world.InventoryState;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -188,6 +189,19 @@ public final class AgentCli {
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
             assertContains(expected.getMessage(), "no supported acquisition strategy");
         }
+
+        // Table-gated outputs refuse with a precise reason.
+        recipes.put("minecraft:iron_pickaxe", tableRecipe("minecraft:iron_pickaxe", 1,
+                cell("minecraft:iron_ingot"), cell("minecraft:iron_ingot"),
+                cell("minecraft:iron_ingot"), cell("minecraft:stick"),
+                cell("minecraft:stick")));
+        try {
+            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0, crafter,
+                    "minecraft:iron_pickaxe", 1);
+            throw new IllegalStateException("3x3 recipes must fail planning without a table");
+        } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
+            assertContains(expected.getMessage(), "crafting table");
+        }
     }
 
     private static SlotSpec cell(String itemId) {
@@ -195,7 +209,17 @@ public final class AgentCli {
     }
 
     private static CraftableRecipe recipe(String output, int resultCount, SlotSpec... slots) {
-        return new CraftableRecipe(output, resultCount, slots.length, 1, List.of(slots));
+        return new CraftableRecipe(output, resultCount, slots.length, 1, false, List.of(slots));
+    }
+
+    private static CraftableRecipe tableRecipe(String output, int resultCount, SlotSpec... slots) {
+        int width = 3;
+        int height = (slots.length + width - 1) / width;
+        java.util.List<SlotSpec> cells = new ArrayList<>(List.of(slots));
+        while (cells.size() < width * height) {
+            cells.add(SlotSpec.EMPTY);
+        }
+        return new CraftableRecipe(output, resultCount, width, height, true, cells);
     }
 
     private static void assertEquals(Object actual, Object expected, String label) {

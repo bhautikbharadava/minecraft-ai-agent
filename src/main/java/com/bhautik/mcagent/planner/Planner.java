@@ -82,6 +82,10 @@ public final class Planner {
         RecipeResolver.CraftableRecipe recipe = resolver.findRecipe(itemId)
                 .orElseThrow(() -> new PlanningException(
                         "no supported acquisition strategy for " + itemId));
+        if (recipe.requiresTable()) {
+            throw new PlanningException(itemId.replaceFirst("^minecraft:", "")
+                    + " requires a crafting table (3x3), which the agent cannot use yet");
+        }
         int crafts = ceilDiv(missing, recipe.resultCount());
         // Aggregate identical ingredient slots first (UC-09: shared
         // dependencies are deduplicated, e.g. 4 plank slots -> one demand).
