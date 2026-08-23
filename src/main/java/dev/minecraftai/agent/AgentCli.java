@@ -4,10 +4,13 @@ import com.bhautik.mcagent.action.ActionStatus;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
+import com.bhautik.mcagent.item.DirectAcquisitions;
 import dev.minecraftai.agent.command.AgentCommandHandler;
 import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.item.ItemRegistry;
 import dev.minecraftai.agent.world.InventoryState;
+
+import java.util.Set;
 
 public final class AgentCli {
     private AgentCli() {
@@ -21,6 +24,7 @@ public final class AgentCli {
         if (args.length > 0 && "validate".equals(args[0])) {
             validate(handler);
             validateMineActionLifecycle();
+            validateAcquisitionTable();
             return;
         }
         System.out.println(handler.handle(String.join(" ", args)));
@@ -78,6 +82,29 @@ public final class AgentCli {
         offline.start();
         assertEquals(offline.status(), ActionStatus.FAILED, "missing backend fails fast");
         assertContains(String.valueOf(offline.failureReason()), "no navigation backend");
+    }
+
+    private static void validateAcquisitionTable() {
+        assertContains(DirectAcquisitions.sourceBlockFor("minecraft:diamond").orElseThrow(),
+                "minecraft:diamond_ore");
+        assertContains(DirectAcquisitions.sourceBlockFor("minecraft:cobblestone").orElseThrow(),
+                "minecraft:stone");
+        if (DirectAcquisitions.sourceBlockFor("minecraft:iron_ingot").isPresent()) {
+            throw new IllegalStateException("smelted items must not be directly acquirable");
+        }
+        String diamondGate = DirectAcquisitions.missingToolReason("minecraft:diamond", Set.of());
+        assertContains(String.valueOf(diamondGate), "requires iron pickaxe");
+        if (DirectAcquisitions.missingToolReason("minecraft:diamond",
+                Set.of("minecraft:iron_pickaxe")) != null) {
+            throw new IllegalStateException("iron pickaxe should satisfy diamond mining");
+        }
+        if (DirectAcquisitions.missingToolReason("minecraft:dirt", Set.of()) != null) {
+            throw new IllegalStateException("hand-gatherables must never be tool-gated");
+        }
+        long entries = DirectAcquisitions.all().size();
+        if (entries < 50) {
+            throw new IllegalStateException("acquisition table suspiciously small: " + entries);
+        }
     }
 
     private static void assertEquals(Object actual, Object expected, String label) {

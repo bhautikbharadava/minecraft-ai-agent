@@ -3,6 +3,7 @@ package com.bhautik.mcagent.goal;
 import com.bhautik.mcagent.McAgent;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.executor.AgentExecutor;
+import com.bhautik.mcagent.item.DirectAcquisitions;
 import com.bhautik.mcagent.state.InventoryState;
 import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.goal.GetItemGoal;
@@ -10,10 +11,13 @@ import dev.minecraftai.agent.goal.GoalStatus;
 import dev.minecraftai.agent.item.ItemRegistry;
 import dev.minecraftai.agent.item.MinecraftItem;
 
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -25,6 +29,7 @@ public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 2;
 
+    /** JVM-only fallback used by the CLI smoke checks; in-game resolution uses the live registry. */
     private final ItemRegistry itemRegistry = ItemRegistry.vanillaDefaults();
     private final AgentGoalManager goalManager = new AgentGoalManager();
     private final AgentExecutor executor;
@@ -37,7 +42,25 @@ public final class GoalService {
     }
 
     public boolean isValidItem(String rawName) {
-        return itemRegistry.resolve(rawName).isPresent();
+        return resolve(rawName).isPresent();
+    }
+
+    /**
+     * Resolves shorthand ("diamond") or namespaced ids against the live
+     * vanilla item registry, so every real item is requestable.
+     */
+    private Optional<MinecraftItem> resolve(String rawName) {
+        if (rawName == null || rawName.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = rawName.trim().toLowerCase();
+        String qualified = normalized.contains(":") ? normalized : "minecraft:" + normalized;
+        Identifier id = Identifier.tryParse(qualified);
+        if (id == null) {
+            return Optional.empty();
+        }
+        boolean exists = BuiltInRegistries.ITEM.get(id).isPresent();
+        return exists ? Optional.of(new MinecraftItem(id.toString())) : Optional.empty();
     }
 
     public String getItem(ServerPlayer player, String rawItemName, int requestedCount) {
@@ -45,7 +68,7 @@ public final class GoalService {
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
             }
-            MinecraftItem item = itemRegistry.resolve(rawItemName).orElseThrow();
+            MinecraftItem item = resolve(rawItemName).orElseThrow();
             dev.minecraftai.agent.world.InventoryState snapshot = snapshot(player);
             GetItemGoal goal = new GetItemGoal(item, requestedCount, snapshot);
             McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
@@ -183,6 +206,14 @@ public final class GoalService {
         }
         int current = activeRun.snapshot.count(activeRun.item);
         activeRun.snapshot.setCount(activeRun.item, current);
+        // Tool gate: refuse up front when the source block cannot drop
+        // anything for this player, instead of mining uselessly.
+        String toolReason = DirectAcquisitions.missingToolReason(
+                activeRun.item.id(), InventoryState.collect(player).itemCounts().keySet());
+        if (toolReason != null) {
+            activeRun.goal.markFailed(toolReason);
+            return List.of();
+        }
         List<AgentAction> actions = executor.planner().planAcquisition(
                 activeRun.item.id(), current, activeRun.requested,
                 () -> liveCount(activeRun.server, activeRun.playerId, activeRun.item));
