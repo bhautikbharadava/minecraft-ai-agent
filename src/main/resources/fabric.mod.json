@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "mcagent",
+  "version": "${version}",
+  "name": "Minecraft AI Agent",
+  "description": "Foundation for an autonomous Minecraft AI agent.",
+  "authors": ["Bhautik"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.bhautik.mcagent.McAgent"]
+  },
+  "depends": {
+    "fabricloader": ">=0.17.2",
+    "minecraft": "~1.21.8",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
