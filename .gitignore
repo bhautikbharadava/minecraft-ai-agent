@@ -4,3 +4,7 @@ run/
 *.iml
 .idea/
 *.class
+
+# Local dev-only jars
+libs/
+logs/

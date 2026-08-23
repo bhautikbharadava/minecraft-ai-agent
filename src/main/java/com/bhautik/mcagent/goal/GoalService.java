@@ -11,7 +11,7 @@ import dev.minecraftai.agent.item.ItemRegistry;
 import dev.minecraftai.agent.item.MinecraftItem;
 
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
 
 import java.util.List;
 import java.util.UUID;
@@ -40,7 +40,7 @@ public final class GoalService {
         return itemRegistry.resolve(rawName).isPresent();
     }
 
-    public String getItem(ServerPlayerEntity player, String rawItemName, int requestedCount) {
+    public String getItem(ServerPlayer player, String rawItemName, int requestedCount) {
         synchronized (monitor) {
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
@@ -54,8 +54,8 @@ public final class GoalService {
                 McAgent.LOGGER.info("[Agent] Goal completed immediately: {}", goal.title());
                 return goal.progressReport();
             }
-            run = new ActiveRun(goal, item, player.getUuid(), requestedCount,
-                    snapshot, player.getServer());
+            run = new ActiveRun(goal, item, player.getUUID(), requestedCount,
+                    snapshot, player.level().getServer());
             if (!launchNextAction()) {
                 return finishWithFailure(run);
             }
@@ -99,7 +99,7 @@ public final class GoalService {
             if (run == null) {
                 return;
             }
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(run.playerId);
+            ServerPlayer player = server.getPlayerList().getPlayer(run.playerId);
             if (player == null) {
                 abandonRun("player left the server");
                 return;
@@ -115,7 +115,7 @@ public final class GoalService {
         }
     }
 
-    private void handleFinishedAction(ServerPlayerEntity player, AgentAction finished) {
+    private void handleFinishedAction(ServerPlayer player, AgentAction finished) {
         ActiveRun activeRun = run;
         if (activeRun == null) {
             return;
@@ -177,7 +177,7 @@ public final class GoalService {
     }
 
     private List<AgentAction> planFor(ActiveRun activeRun) {
-        ServerPlayerEntity player = activeRun.server.getPlayerManager().getPlayer(activeRun.playerId);
+        ServerPlayer player = activeRun.server.getPlayerList().getPlayer(activeRun.playerId);
         if (player == null) {
             return List.of();
         }
@@ -217,7 +217,7 @@ public final class GoalService {
         run = null;
     }
 
-    private void refreshSnapshot(ServerPlayerEntity player) {
+    private void refreshSnapshot(ServerPlayer player) {
         ActiveRun activeRun = run;
         if (activeRun == null) {
             return;
@@ -225,20 +225,20 @@ public final class GoalService {
         activeRun.snapshot.setCount(activeRun.item, liveCount(player, activeRun));
     }
 
-    private static int liveCount(ServerPlayerEntity player, ActiveRun activeRun) {
+    private static int liveCount(ServerPlayer player, ActiveRun activeRun) {
         return InventoryState.collect(player).itemCounts()
                 .getOrDefault(activeRun.item.id(), 0);
     }
 
     private static int liveCount(MinecraftServer server, UUID playerId, MinecraftItem item) {
-        ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
+        ServerPlayer player = server.getPlayerList().getPlayer(playerId);
         if (player == null) {
             return 0;
         }
         return InventoryState.collect(player).itemCounts().getOrDefault(item.id(), 0);
     }
 
-    private static dev.minecraftai.agent.world.InventoryState snapshot(ServerPlayerEntity player) {
+    private static dev.minecraftai.agent.world.InventoryState snapshot(ServerPlayer player) {
         dev.minecraftai.agent.world.InventoryState snapshot = new dev.minecraftai.agent.world.InventoryState();
         InventoryState.collect(player).itemCounts()
                 .forEach((itemId, count) -> snapshot.setCount(new MinecraftItem(itemId), count));

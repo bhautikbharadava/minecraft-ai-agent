@@ -12,8 +12,8 @@ import java.util.function.IntSupplier;
  */
 public final class MineAction implements AgentAction {
     /** Ticks without inventory progress before the backend is re-issued or the action fails. */
-    static final int IDLE_TIMEOUT_TICKS = 600;
-    static final int MAX_ISSUE_ATTEMPTS = 2;
+    public static final int IDLE_TIMEOUT_TICKS = 600;
+    public static final int MAX_ISSUE_ATTEMPTS = 2;
 
     private final String title;
     private final String sourceBlockName;

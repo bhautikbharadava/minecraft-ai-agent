@@ -49,18 +49,19 @@ on stall, and verifies the final count before reporting SUCCESS.
 
 ## Versions
 
-- Minecraft: `1.21.8`
-- Yarn mappings: `1.21.8+build.1`
-- Fabric Loader: `0.17.2`
-- Fabric API: `0.133.3+1.21.8`
-- Fabric Loom: `1.10.1`
-- Java: `21`
+- Minecraft: `26.2` (matches the `sandbox` launcher profile)
+- Fabric Loader: `0.19.3`
+- Fabric API: `0.158.0+26.2`
+- Fabric Loom: `1.17.19` (`net.fabricmc.fabric-loom`, official names — no yarn mappings)
+- Java: `25`
 
 ## Build
 
 ```bash
 gradle build
 ```
+
+Requires JDK 25.
 
 The mod jar is generated under `build/libs/`.
 

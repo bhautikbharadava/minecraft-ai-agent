@@ -3,6 +3,9 @@ package com.bhautik.mcagent.integration;
 import com.bhautik.mcagent.McAgent;
 
 import java.lang.reflect.Method;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Execution seam between the agent and a navigation backend. Goals and
@@ -62,6 +65,8 @@ public interface BaritoneIntegration {
  */
 final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
 
+    private static final long CLIENT_THREAD_TIMEOUT_SECONDS = 5;
+
     private final Object mineProcess;
     private final String initFailure;
 
@@ -102,22 +107,19 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
                     new Class<?>[]{int.class, String[].class});
             if (byName != null) {
                 byName.setAccessible(true);
-                byName.invoke(mineProcess, quantity, (Object) new String[]{blockName});
+                runOnClientThread(() -> byName.invoke(mineProcess, quantity, (Object) new String[]{blockName}));
                 return true;
             }
             Method plain = findMethod(mineProcess.getClass(), "mine",
                     new Class<?>[]{String[].class});
             if (plain != null) {
                 plain.setAccessible(true);
-                plain.invoke(mineProcess, (Object) new String[]{blockName});
+                runOnClientThread(() -> plain.invoke(mineProcess, (Object) new String[]{blockName}));
                 return true;
             }
             return false;
         } catch (Throwable throwable) {
-            Throwable root = throwable;
-            while (root.getCause() != null) {
-                root = root.getCause();
-            }
+            Throwable root = rootOf(throwable);
             McAgent.LOGGER.warn("Baritone mining request failed: {}", String.valueOf(root));
             return false;
         }
@@ -132,7 +134,7 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             Method cancel = findMethod(mineProcess.getClass(), "cancel", new Class<?>[0]);
             if (cancel != null) {
                 cancel.setAccessible(true);
-                cancel.invoke(mineProcess);
+                runOnClientThread(() -> cancel.invoke(mineProcess));
             }
         } catch (Throwable ignored) {
             // Best-effort stop; verification still guards goal completion.
@@ -142,6 +144,70 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
     @Override
     public String describe() {
         return mineProcess != null ? "Baritone" : String.valueOf(initFailure);
+    }
+
+    /**
+     * Baritone state is main-thread-only; integrated-server commands and
+     * ticks run on the server thread. Marshals the call onto the client
+     * thread via {@code Minecraft.execute} when needed, waiting briefly
+     * for completion so callers still get synchronous outcomes.
+     */
+    private void runOnClientThread(ThrowingRunnable task) throws Throwable {
+        Class<?> clientClass;
+        try {
+            clientClass = Class.forName("net.minecraft.client.Minecraft");
+        } catch (ClassNotFoundException missing) {
+            task.run(); // dedicated server: no client thread exists
+            return;
+        }
+        Object client = clientClass.getMethod("getInstance").invoke(null);
+        Method onThread = findMethod(clientClass, "isOnThread", new Class<?>[0]);
+        if (onThread == null) {
+            onThread = findMethod(clientClass, "isSameThread", new Class<?>[0]);
+        }
+        if (onThread != null) {
+            onThread.setAccessible(true);
+            if ((Boolean) onThread.invoke(client)) {
+                task.run();
+                return;
+            }
+        }
+        Method execute = findMethod(clientClass, "execute", new Class<?>[]{Runnable.class});
+        if (execute == null) {
+            throw new IllegalStateException("client thread scheduling unavailable");
+        }
+        execute.setAccessible(true);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch done = new CountDownLatch(1);
+        execute.invoke(client, (Runnable) () -> {
+            try {
+                task.run();
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            } finally {
+                done.countDown();
+            }
+        });
+        if (!done.await(CLIENT_THREAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("timed out waiting for client thread");
+        }
+        Throwable thrown = failure.get();
+        if (thrown != null) {
+            throw thrown;
+        }
+    }
+
+    private static Throwable rootOf(Throwable throwable) {
+        Throwable root = throwable;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+        return root;
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     private static Method findMethod(Class<?> type, String name, Class<?>[] parameterTypes) {
