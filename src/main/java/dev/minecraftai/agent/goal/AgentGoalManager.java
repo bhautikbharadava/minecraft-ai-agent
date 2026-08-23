@@ -16,6 +16,11 @@ public final class AgentGoalManager {
     }
 
     public Optional<AgentGoal> activeGoal() {
+        // A stored goal whose lifecycle already ended (SUCCESS / FAILED /
+        // CANCELLED) is history, not an active goal blocking new ones.
+        if (activeGoal != null && activeGoal.status() != GoalStatus.ACTIVE) {
+            return Optional.empty();
+        }
         return Optional.ofNullable(activeGoal);
     }
 

@@ -26,12 +26,13 @@ public final class AgentCli {
     }
 
     public static void main(String[] args) {
+        InventoryState inventory = new InventoryState();
         AgentCommandHandler handler = new AgentCommandHandler(
                 ItemRegistry.vanillaDefaults(),
-                new InventoryState(),
+                inventory,
                 new AgentGoalManager());
         if (args.length > 0 && "validate".equals(args[0])) {
-            validate(handler);
+            validate(handler, inventory);
             validateMineActionLifecycle();
             validateAcquisitionTable();
             validateDependencyPlanning();
@@ -40,13 +41,31 @@ public final class AgentCli {
         System.out.println(handler.handle(String.join(" ", args)));
     }
 
-    private static void validate(AgentCommandHandler handler) {
+    private static void validate(AgentCommandHandler handler, InventoryState inventory) {
         assertContains(handler.handle("/agent get cobblestone 64"), "Status: ACTIVE");
         assertContains(handler.handle("/agent goal"), "Missing: 64");
         assertContains(handler.handle("/agent cancel"), "Status: CANCELLED");
         assertContains(handler.handle("/agent get not_an_item 1"), "Invalid item name");
         assertContains(handler.handle("/agent get cobblestone 0"), "Invalid count");
         assertContains(handler.handle("/agent get cobblestone nope"), "Invalid count");
+
+        // A terminal goal must never block a new one.
+        assertContains(handler.handle("/agent get oak_log 1"), "Status: ACTIVE");
+        assertContains(handler.handle("/agent cancel"), "CANCELLED");
+        assertContains(handler.handle("/agent cancel"), "No active goal to cancel.");
+        // Regression guard for the in-game path: goals marked FAILED/SUCCESS
+        // mid-run must read as inactive to the manager.
+        dev.minecraftai.agent.goal.AgentGoalManager mgr = new dev.minecraftai.agent.goal.AgentGoalManager();
+        InventoryState scratch = new InventoryState();
+        dev.minecraftai.agent.goal.GetItemGoal terminalCheck =
+                new dev.minecraftai.agent.goal.GetItemGoal(
+                        new dev.minecraftai.agent.item.MinecraftItem("minecraft:dirt"), 4, scratch);
+        mgr.register(terminalCheck);
+        assertContains(terminalCheck.progressReport(), "Status: ACTIVE");
+        terminalCheck.markFailed("boom");
+        if (mgr.activeGoal().isPresent()) {
+            throw new IllegalStateException("terminal goal must not count as active");
+        }
     }
 
     /**
