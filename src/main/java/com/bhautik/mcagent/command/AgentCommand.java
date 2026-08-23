@@ -5,6 +5,7 @@ import com.bhautik.mcagent.state.InventoryState;
 import com.bhautik.mcagent.state.WorldState;
 import com.bhautik.mcagent.state.WorldStateCollector;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -26,7 +27,7 @@ public final class AgentCommand {
                         .executes(context -> sendStatus(context.getSource(), executor))));
     }
 
-    private static int sendStatus(ServerCommandSource source, AgentExecutor executor) {
+    private static int sendStatus(ServerCommandSource source, AgentExecutor executor) throws CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         WorldState worldState = WorldStateCollector.collect(player);
         InventoryState inventoryState = InventoryState.collect(player);

@@ -4,11 +4,12 @@ pluginManagement {
         maven { url = 'https://modmaven.dev/' }
         maven { url = 'https://fabricmc.forgecdn.net/' }
         gradlePluginPortal()
+        mavenCentral()
     }
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
         maven { url = 'https://maven.fabricmc.net/' }
         mavenCentral()

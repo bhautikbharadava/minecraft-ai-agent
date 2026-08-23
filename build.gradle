@@ -1,6 +1,7 @@
 plugins {
     id 'fabric-loom' version "${loom_version}"
     id 'maven-publish'
+    id 'application'
 }
 
 version = project.mod_version
@@ -44,3 +45,17 @@ processResources {
 tasks.withType(JavaCompile).configureEach {
     it.options.release = 21
 }
+
+application {
+    mainClass = 'dev.minecraftai.agent.AgentCli'
+}
+
+tasks.register('validateAgentCommands', JavaExec) {
+    group = 'verification'
+    description = 'Runs smoke checks for agent command handling.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'dev.minecraftai.agent.AgentCli'
+    args 'validate'
+}
+
+check.dependsOn tasks.named('validateAgentCommands')
