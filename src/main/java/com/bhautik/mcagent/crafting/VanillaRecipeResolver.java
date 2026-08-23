@@ -4,7 +4,6 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 import net.minecraft.world.item.crafting.CraftingInput;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Ingredient;
@@ -24,9 +23,6 @@ import java.util.Optional;
  * Built lazily per server instance; recipes only change on datapack reload.
  */
 public final class VanillaRecipeResolver implements RecipeResolver {
-    /** 26.x dropped Ingredient.EMPTY; an air ingredient behaves identically. */
-    private static final Ingredient EMPTY_INGREDIENT = Ingredient.of(Items.AIR);
-
     private final MinecraftServer server;
     private final Grid grid;
     private volatile Map<String, CraftableRecipe> index;
@@ -78,7 +74,7 @@ public final class VanillaRecipeResolver implements RecipeResolver {
             List<SlotSpec> cells = new ArrayList<>();
             boolean resolvable = true;
             for (Ingredient ingredient : definition.cells()) {
-                if (ingredient.isEmpty()) {
+                if (ingredient == null || ingredient.isEmpty()) {
                     cells.add(SlotSpec.EMPTY);
                     continue;
                 }
@@ -116,9 +112,12 @@ public final class VanillaRecipeResolver implements RecipeResolver {
             if (width > maxSide || height > maxSide) {
                 return null;
             }
+            // 26.x has no Ingredient.EMPTY and air ingredients throw on
+            // construction, so shaped padding stays null until it becomes
+            // an explicit SlotSpec.EMPTY cell.
             return new GridDefinition(width, height,
                     shaped.getIngredients().stream()
-                            .map(optional -> optional.orElse(EMPTY_INGREDIENT))
+                            .map(optional -> optional.orElse(null))
                             .toList());
         }
         if (recipe instanceof ShapelessRecipe shapeless) {
