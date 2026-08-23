@@ -8,6 +8,7 @@ public final class GetItemGoal implements AgentGoal {
     private final int requestedAmount;
     private final InventoryState inventoryState;
     private GoalStatus status = GoalStatus.IDLE;
+    private String failureReason;
 
     public GetItemGoal(MinecraftItem targetItem, int requestedAmount, InventoryState inventoryState) {
         if (requestedAmount <= 0) {
@@ -56,12 +57,35 @@ public final class GetItemGoal implements AgentGoal {
         }
     }
 
+    /** Marks an ACTIVE goal as SUCCESS once execution verified the inventory. */
+    public void markSuccess() {
+        if (status == GoalStatus.ACTIVE && missingAmount() == 0) {
+            status = GoalStatus.SUCCESS;
+        }
+    }
+
+    /** Marks an ACTIVE goal as FAILED with a reason for the progress report. */
+    public void markFailed(String reason) {
+        if (status == GoalStatus.ACTIVE) {
+            failureReason = reason;
+            status = GoalStatus.FAILED;
+        }
+    }
+
+    public String failureReason() {
+        return failureReason;
+    }
+
     @Override
     public String progressReport() {
-        return String.join(System.lineSeparator(),
+        StringBuilder report = new StringBuilder(String.join(System.lineSeparator(),
                 "Goal: " + title(),
                 "Current: " + currentAmount(),
                 "Missing: " + missingAmount(),
-                "Status: " + status);
+                "Status: " + status));
+        if (failureReason != null) {
+            report.append(System.lineSeparator()).append("Reason: ").append(failureReason);
+        }
+        return report.toString();
     }
 }

@@ -13,41 +13,55 @@ Implemented:
 - Inventory-state collection with item-count summaries.
 - Goal lifecycle (`IDLE → ACTIVE → SUCCESS / FAILED / CANCELLED`) with
   `GetItemGoal`, goal manager, and item registry.
+- Action model (`PENDING → RUNNING → SUCCESS / FAILED / CANCELLED`)
+  with `MineAction`, an idle-timeout retry ladder, and safe cancellation.
 - In-game commands: `/agent get <item> <count>`, `/agent goal`,
-  `/agent cancel` (goal registration and tracking only).
-- Minimal planner, executor, goal, and Baritone integration seams.
+  `/agent cancel`.
+- **First execution (M3):** get-item goals are planned into `MineAction`s
+  and executed through the Baritone integration layer, with inventory
+  monitored live every second and verified independently before SUCCESS.
 
-Not implemented yet: autonomous execution (mining via Baritone),
-crafting, smelting, LLM integration, or farms.
+Not implemented yet: crafting, smelting, survival interruptions,
+exploration goals, LLM integration, or farms.
+
+### Execution backend
+
+Mining is delegated to [Baritone](https://github.com/cabaletta/baritone)
+through a reflective integration layer: install Baritone alongside the mod
+to enable autonomous mining. Without Baritone, goals fail fast with a
+clear reason instead of pretending to work. Goals and planners never call
+Baritone directly — only actions touch the integration layer, which can be
+swapped for any navigation backend.
 
 ## Commands
 
 ```text
 /agent status                 show world/inventory snapshot and executor state
-/agent get <item> <count>     register a GetItemGoal against current inventory
-/agent goal                   report the active goal's progress
-/agent cancel                 cancel the active goal
+/agent get <item> <count>     register a GetItemGoal and start executing it
+/agent goal                   report the active goal's live progress
+/agent cancel                 cancel the active goal and stop mining
 ```
 
-Items resolve by shorthand name (for example `cobblestone`) against a
-small vanilla defaults list. If the inventory already satisfies the
-request, the goal succeeds immediately; otherwise it stays `ACTIVE`
-until execution lands in a later milestone.
+Items resolve by shorthand name (for example `cobblestone`). If the
+inventory already satisfies the request, the goal succeeds immediately;
+otherwise the agent plans mining, tracks inventory progress, retries once
+on stall, and verifies the final count before reporting SUCCESS.
 
 ## Versions
 
-- Minecraft: `1.21.8`
-- Yarn mappings: `1.21.8+build.1`
-- Fabric Loader: `0.17.2`
-- Fabric API: `0.133.3+1.21.8`
-- Fabric Loom: `1.10.1`
-- Java: `21`
+- Minecraft: `26.2` (matches the `sandbox` launcher profile)
+- Fabric Loader: `0.19.3`
+- Fabric API: `0.158.0+26.2`
+- Fabric Loom: `1.17.19` (`net.fabricmc.fabric-loom`, official names — no yarn mappings)
+- Java: `25`
 
 ## Build
 
 ```bash
 gradle build
 ```
+
+Requires JDK 25.
 
 The mod jar is generated under `build/libs/`.
 
@@ -72,14 +86,16 @@ Once in a world, run:
 com.bhautik.mcagent
 ├── McAgent
 ├── command/AgentCommand
+├── action/AgentAction, ActionStatus, MineAction
 ├── state/WorldState
 ├── state/WorldStateCollector
 ├── state/InventoryState
-├── goal/GoalService        (adapts the goal lifecycle to live game state)
+├── goal/GoalService        (agent brain: plan → execute → verify → recover)
 ├── goal/Goal               (planner-facing seam, pre-execution)
 ├── planner/Planner
-├── executor/AgentExecutor
-└── integration/BaritoneIntegration
+├── executor/AgentExecutor  (single-action tick runner)
+├── item/MineableItems      (directly-mineable item → source block map)
+└── integration/BaritoneIntegration (reflective, swap-safe backend)
 
 dev.minecraftai.agent         (framework-free goal lifecycle core)
 ├── goal/AgentGoal, GoalStatus, GetItemGoal, AgentGoalManager

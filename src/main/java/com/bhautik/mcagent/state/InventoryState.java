@@ -1,8 +1,8 @@
 package com.bhautik.mcagent.state;
 
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -14,12 +14,12 @@ public record InventoryState(Map<String, Integer> itemCounts) {
         itemCounts = Collections.unmodifiableMap(new LinkedHashMap<>(itemCounts));
     }
 
-    public static InventoryState collect(ServerPlayerEntity player) {
+    public static InventoryState collect(ServerPlayer player) {
         Map<String, Integer> counts = new LinkedHashMap<>();
-        for (int slot = 0; slot < player.getInventory().size(); slot++) {
-            ItemStack stack = player.getInventory().getStack(slot);
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = player.getInventory().getItem(slot);
             if (!stack.isEmpty()) {
-                String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+                String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
                 counts.merge(itemId, stack.getCount(), Integer::sum);
             }
         }
