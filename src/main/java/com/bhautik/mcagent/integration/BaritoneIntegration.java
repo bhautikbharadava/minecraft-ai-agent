@@ -161,38 +161,55 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             return false;
         }
         try {
-            Class<?> goalType = Class.forName("baritone.api.goal.Goal");
-            Class<?> goalBlock = Class.forName("baritone.api.goal.GoalBlock");
+            Class<?> goalBlock = resolveGoalBlock();
+            if (goalBlock == null) {
+                McAgent.LOGGER.warn("Baritone goto unsupported: no GoalBlock class found");
+                return false;
+            }
             Object goal = goalBlock.getConstructor(int.class, int.class, int.class)
                     .newInstance(x, y, z);
             Method setGoalAndPath = findMethod(goalProcess.getClass(), "setGoalAndPath",
-                    new Class<?>[]{goalType});
-            if (setGoalAndPath == null) {
-                setGoalAndPath = findMethod(goalProcess.getClass(), "path", new Class<?>[0]);
-                if (setGoalAndPath != null) {
-                    Method setGoal = findMethod(goalProcess.getClass(), "setGoal",
-                            new Class<?>[]{goalType});
-                    if (setGoal == null) {
-                        return false;
-                    }
-                    setGoal.setAccessible(true);
-                    runOnClientThread(() -> setGoal.invoke(goalProcess, goal));
-                    Method path = setGoalAndPath;
-                    path.setAccessible(true);
-                    runOnClientThread(() -> path.invoke(goalProcess));
-                    return true;
-                }
+                    new Class<?>[]{goalBlock});
+            if (setGoalAndPath != null) {
+                Method call = setGoalAndPath;
+                call.setAccessible(true);
+                runOnClientThread(() -> call.invoke(goalProcess, goal));
+                return true;
+            }
+            Method setGoal = findMethod(goalProcess.getClass(), "setGoal",
+                    new Class<?>[]{goalBlock});
+            if (setGoal == null) {
                 return false;
             }
-            Method setGoalAndPathCall = setGoalAndPath;
-            setGoalAndPathCall.setAccessible(true);
-            runOnClientThread(() -> setGoalAndPathCall.invoke(goalProcess, goal));
+            Method startPath = findMethod(goalProcess.getClass(), "path", new Class<?>[0]);
+            if (startPath == null) {
+                return false;
+            }
+            setGoal.setAccessible(true);
+            runOnClientThread(() -> setGoal.invoke(goalProcess, goal));
+            startPath.setAccessible(true);
+            runOnClientThread(() -> startPath.invoke(goalProcess));
             return true;
         } catch (Throwable throwable) {
             Throwable root = rootOf(throwable);
             McAgent.LOGGER.warn("Baritone goto request failed: {}", String.valueOf(root));
             return false;
         }
+    }
+
+    /** Goal classes have moved between Baritone versions; probe known homes. */
+    private static Class<?> resolveGoalBlock() {
+        for (String candidate : new String[]{
+                "baritone.api.pathing.goals.GoalBlock",
+                "baritone.api.goal.GoalBlock",
+                "baritone.api.utils.goal.GoalBlock"}) {
+            try {
+                return Class.forName(candidate);
+            } catch (ClassNotFoundException ignored) {
+                // try the next known location
+            }
+        }
+        return null;
     }
 
     @Override
