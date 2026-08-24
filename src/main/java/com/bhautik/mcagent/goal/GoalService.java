@@ -214,6 +214,8 @@ public final class GoalService {
             var environment = new com.bhautik.mcagent.planner.Planner.Environment(
                     VanillaCraftingExecutor.forPlayer(player, activeRun.server),
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.breaker(player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.tableLocator(player,
                             com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                     (x, y, z) -> player.distanceToSqr(x, y, z));

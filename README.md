@@ -44,7 +44,10 @@ Implemented:
   inventory — if one exists within walking distance (~48 blocks) the
   planner emits `MoveAction` (Baritone goto) to reach it instead of
   crafting another; only when none exists nearby does the agent build
-  one. Arrival is verified against live distance (PRD 13).
+  one. Arrival is verified against live distance (PRD 13). Tables the
+  agent placed itself are collected afterwards (`BreakBlockAction`,
+  verified by cleared block state + returned item); pre-existing
+  tables are left untouched.
 - **Tool ladders:** when a mineable item needs a pickaxe tier the agent
   doesn't have, the planner folds the cheapest qualifying tool's whole
   chain into the plan instead of refusing — `/agent get stone_pickaxe 1`

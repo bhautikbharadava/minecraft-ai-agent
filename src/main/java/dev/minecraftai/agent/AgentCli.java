@@ -222,11 +222,11 @@ public final class AgentCli {
         }
 
         // M6: a craftable table-gated item plans acquire-table -> place ->
-        // craft when the world has no table yet.
+        // craft -> pick-the-table-back-up when the world has no table yet.
         List<AgentAction> chestPlan = planner.planAcquisition(resolver,
                 id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE),
                 "minecraft:chest", 1);
-        assertEquals(chestPlan.size(), 5, "chest chain length");
+        assertEquals(chestPlan.size(), 6, "chest chain length");
         assertContains(chestPlan.get(0).title(), "Mine");
         assertContains(chestPlan.get(1).title(), "oak_planks");
         assertContains(chestPlan.get(2).title(), "Craft");
@@ -234,17 +234,24 @@ public final class AgentCli {
         assertEquals(((PlaceBlockAction) chestPlan.get(3)).status(), ActionStatus.PENDING,
                 "placement starts PENDING");
         assertContains(chestPlan.get(4).title(), "chest");
+        assertEquals(chestPlan.get(5).getClass(),
+                com.bhautik.mcagent.action.BreakBlockAction.class,
+                "placed tables are collected last");
 
-        // With a table already in range, no table acquisition or placement.
+        // With a table already in range, no table acquisition or placement,
+        // and the world's table is left alone (no collect step).
         List<AgentAction> nearTablePlan = planner.planAcquisition(resolver,
                 id -> 0, Set.of(), id -> 0, env(crafter, placer, tableNearby()),
                 "minecraft:chest", 1);
         assertEquals(nearTablePlan.size(), 3, "near-table chain length");
-        if (nearTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)) {
-            throw new IllegalStateException("existing table must not trigger placement");
+        if (nearTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)
+                || nearTablePlan.stream()
+                        .anyMatch(action -> action instanceof com.bhautik.mcagent.action.BreakBlockAction)) {
+            throw new IllegalStateException("existing table must not trigger placement or collection");
         }
 
-        // A placed table beyond interaction range is walked to, not rebuilt.
+        // A placed table beyond interaction range is walked to, not rebuilt,
+        // and pre-existing world tables are never collected.
         List<AgentAction> farTablePlan = planner.planAcquisition(resolver,
                 id -> 0, Set.of(), id -> 0, env(crafter, placer, tableFarAway()),
                 "minecraft:chest", 1);
@@ -254,8 +261,10 @@ public final class AgentCli {
         assertEquals(farTablePlan.get(2).getClass(), com.bhautik.mcagent.action.MoveAction.class,
                 "walks to the existing table");
         assertContains(farTablePlan.get(3).title(), "chest");
-        if (farTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)) {
-            throw new IllegalStateException("reachable table must never be re-placed");
+        if (farTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)
+                || farTablePlan.stream()
+                        .anyMatch(action -> action instanceof com.bhautik.mcagent.action.BreakBlockAction)) {
+            throw new IllegalStateException("reachable world tables must not be re-placed or collected");
         }
         double[] distance = {100.0};
         com.bhautik.mcagent.action.MoveAction walking = new com.bhautik.mcagent.action.MoveAction(
@@ -266,14 +275,18 @@ public final class AgentCli {
         walking.tick();
         assertEquals(walking.status(), ActionStatus.SUCCESS, "arrival verified by distance");
 
-        // Carrying a table skips crafting one but still places it.
+        // Carrying a table skips crafting one but still places (and later
+        // collects) it.
         Map<String, Integer> carryingTable = new HashMap<>();
         carryingTable.put("minecraft:crafting_table", 1);
         List<AgentAction> carriedPlan = planner.planAcquisition(resolver,
                 id -> carryingTable.getOrDefault(id, 0), Set.of(), id -> 0,
                 env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE), "minecraft:chest", 1);
-        assertEquals(carriedPlan.size(), 4, "carried-table chain length");
+        assertEquals(carriedPlan.size(), 5, "carried-table chain length");
         assertEquals(carriedPlan.get(2).getClass(), PlaceBlockAction.class, "still places carried table");
+        assertEquals(carriedPlan.get(4).getClass(),
+                com.bhautik.mcagent.action.BreakBlockAction.class,
+                "carried table comes home too");
 
         // Multiple table-gated crafts share one placement per plan.
         List<AgentAction> bulkPlan = planner.planAcquisition(resolver,
@@ -289,8 +302,8 @@ public final class AgentCli {
         List<AgentAction> cobblePlan = planner.planAcquisition(resolver,
                 id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE),
                 "minecraft:cobblestone", 3);
-        if (cobblePlan.size() != 7) {
-            throw new IllegalStateException("tool-first chain length: expected [7] got ["
+        if (cobblePlan.size() != 8) {
+            throw new IllegalStateException("tool-first chain length: expected [8] got ["
                     + cobblePlan.size() + "] " + cobblePlan.stream()
                             .map(AgentAction::title).toList());
         }
@@ -298,6 +311,9 @@ public final class AgentCli {
         assertContains(cobblePlan.get(5).title(), "wooden_pickaxe");
         assertEquals(cobblePlan.get(6).getClass(), MineAction.class,
                 "mining comes after the tool is crafted");
+        assertEquals(cobblePlan.get(7).getClass(),
+                com.bhautik.mcagent.action.BreakBlockAction.class,
+                "tool chain collects its table last");
         placements = cobblePlan.stream()
                 .filter(action -> action instanceof PlaceBlockAction)
                 .count();
@@ -334,6 +350,35 @@ public final class AgentCli {
         tableInWorld[0] = false;
         gatedThenLost.tick();
         assertEquals(gatedThenLost.status(), ActionStatus.FAILED, "lost table fails mid-run");
+
+        // Collection verifies the item actually returned to inventory.
+        int[] tables = {0};
+        com.bhautik.mcagent.action.BreakBlockAction collect =
+                new com.bhautik.mcagent.action.BreakBlockAction(
+                        "minecraft:crafting_table",
+                        itemId -> {
+                            tables[0] = 1; // world cleared + item granted
+                            return com.bhautik.mcagent.action.BreakBlockAction.Breaker.Result.ok();
+                        },
+                        () -> tables[0]);
+        collect.start();
+        assertEquals(collect.status(), ActionStatus.RUNNING, "collect starts running");
+        collect.tick();
+        assertEquals(collect.status(), ActionStatus.SUCCESS, "collect verified by inventory");
+
+        // A breaker that never succeeds fails honestly with its reason.
+        com.bhautik.mcagent.action.BreakBlockAction stuck =
+                new com.bhautik.mcagent.action.BreakBlockAction(
+                        "minecraft:crafting_table",
+                        itemId -> com.bhautik.mcagent.action.BreakBlockAction.Breaker.Result
+                                .failed("no crafting_table within reach to collect"),
+                        () -> 0);
+        stuck.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.BreakBlockAction.MAX_BREAK_ATTEMPTS; i++) {
+            stuck.tick();
+        }
+        assertEquals(stuck.status(), ActionStatus.FAILED, "stuck collect fails");
+        assertContains(String.valueOf(stuck.failureReason()), "within reach");
     }
 
     /** Builds a planner environment around a given world-table state. */
@@ -341,7 +386,9 @@ public final class AgentCli {
             CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
             com.bhautik.mcagent.world.TableLocator locator) {
         return new com.bhautik.mcagent.planner.Planner.Environment(
-                crafter, placer, locator, (x, y, z) -> 100.0);
+                crafter, placer,
+                itemId -> com.bhautik.mcagent.action.BreakBlockAction.Breaker.Result.ok(),
+                locator, (x, y, z) -> 100.0);
     }
 
     /** A table right next to the agent. */

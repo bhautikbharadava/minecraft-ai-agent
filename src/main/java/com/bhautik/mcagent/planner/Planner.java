@@ -1,6 +1,7 @@
 package com.bhautik.mcagent.planner;
 
 import com.bhautik.mcagent.action.AgentAction;
+import com.bhautik.mcagent.action.BreakBlockAction;
 import com.bhautik.mcagent.action.CraftAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.action.MoveAction;
@@ -46,11 +47,12 @@ public final class Planner {
 
     /**
      * Execution seams handed to emitted actions: real grid crafting,
-     * real block placement, world checks that verify both, and live
-     * distances for navigation verification.
+     * real block placement and collection, world checks that verify
+     * both, and live distances for navigation verification.
      */
     public record Environment(CraftAction.Crafter crafter,
                               PlaceBlockAction.Placer placer,
+                              BreakBlockAction.Breaker breaker,
                               TableLocator tableLocator,
                               DistanceSensor distanceSensor) {
     }
@@ -85,6 +87,13 @@ public final class Planner {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
         expansion.expand(itemId, targetCount);
+        // A table this plan placed is picked back up once everything else
+        // ran; pre-existing world tables are left where they are.
+        if (expansion.placedTable) {
+            expansion.plan.add(new BreakBlockAction(CRAFTING_TABLE_ITEM,
+                    environment.breaker(),
+                    () -> liveCounts.applyAsInt(CRAFTING_TABLE_ITEM)));
+        }
         return expansion.plan;
     }
 
@@ -104,6 +113,8 @@ public final class Planner {
          * guarding against circular tool requirements. */
         private final Set<String> toolChains = new HashSet<>();
         private boolean tableHandled;
+        /** True when this plan itself placed a table (vs walked to one). */
+        private boolean placedTable;
 
         private Expansion(RecipeResolver resolver, Function<String, Integer> plannedCounts,
                           Set<String> ownedItemIds, ToIntFunction<String> liveCounts,
@@ -194,6 +205,7 @@ public final class Planner {
                             plan.add(new PlaceBlockAction(CRAFTING_TABLE_ITEM,
                                     environment.placer(), environment.tableLocator()));
                             tableHandled = true;
+                            placedTable = true;
                         }
                     });
         }

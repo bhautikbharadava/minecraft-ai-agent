@@ -1,5 +1,6 @@
 package com.bhautik.mcagent.integration;
 
+import com.bhautik.mcagent.action.BreakBlockAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
 import com.bhautik.mcagent.world.TableLocator;
 
@@ -55,6 +56,51 @@ public final class VanillaPlacementExecutor {
 
     public static PlaceBlockAction.Placer placer(ServerPlayer player) {
         return itemId -> place(player, itemId);
+    }
+
+    /**
+     * Removes a nearby block the agent itself placed and returns its item
+     * straight to inventory; verifies both the cleared state and the
+     * granted stack before reporting success.
+     */
+    public static BreakBlockAction.Breaker breaker(ServerPlayer player, int radius) {
+        return itemId -> {
+            net.minecraft.resources.Identifier id =
+                    net.minecraft.resources.Identifier.tryParse(itemId);
+            if (id == null) {
+                return BreakBlockAction.Breaker.Result.failed("unknown item " + itemId);
+            }
+            java.util.Optional<net.minecraft.world.level.block.Block> blockOption =
+                    net.minecraft.core.registries.BuiltInRegistries.BLOCK.getOptional(id);
+            if (blockOption.isEmpty()) {
+                return BreakBlockAction.Breaker.Result.failed(
+                        shortName(itemId) + " is not a placeable block");
+            }
+            net.minecraft.world.level.block.Block block = blockOption.get();
+            BlockPos target = findBlockNear(player, block, radius);
+            if (target == null) {
+                return BreakBlockAction.Breaker.Result.failed(
+                        "no " + shortName(itemId) + " within reach to collect");
+            }
+            Level level = player.level();
+            level.removeBlock(target, false);
+            // Verify reality before granting anything (PRD 13).
+            if (!level.getBlockState(target).isAir()) {
+                return BreakBlockAction.Breaker.Result.failed("broken block did not clear");
+            }
+            ItemStack returned =
+                    net.minecraft.core.registries.BuiltInRegistries.ITEM.getOptional(id)
+                            .map(ItemStack::new)
+                            .orElse(null);
+            if (returned == null || returned.isEmpty()) {
+                return BreakBlockAction.Breaker.Result.failed(
+                        shortName(itemId) + " has no item form");
+            }
+            if (!player.getInventory().add(returned)) {
+                player.drop(returned, false);
+            }
+            return BreakBlockAction.Breaker.Result.ok();
+        };
     }
 
     private static PlaceBlockAction.Placer.Result place(ServerPlayer player, String itemId) {
@@ -117,11 +163,18 @@ public final class VanillaPlacementExecutor {
     }
 
     private static BlockPos findTable(ServerPlayer player, int radius) {
+        return findBlockNear(player, Blocks.CRAFTING_TABLE, radius);
+    }
+
+    /** Nearest position whose state matches {@code block}, or null. */
+    private static BlockPos findBlockNear(ServerPlayer player,
+                                          net.minecraft.world.level.block.Block block,
+                                          int radius) {
         BlockPos origin = player.blockPosition();
         for (BlockPos pos : BlockPos.betweenClosed(
                 origin.offset(-radius, -radius, -radius),
                 origin.offset(radius, radius, radius))) {
-            if (player.level().getBlockState(pos).is(Blocks.CRAFTING_TABLE)) {
+            if (player.level().getBlockState(pos).is(block)) {
                 return pos.immutable();
             }
         }
