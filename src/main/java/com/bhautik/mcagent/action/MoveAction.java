@@ -29,7 +29,7 @@ public final class MoveAction implements AgentAction {
     private double lastDistance;
     private int idleTicks;
 
-    public MoveAction(int x, int y, int z, double arriveDistance,
+    public MoveAction(String targetLabel, int x, int y, int z, double arriveDistance,
                       DoubleSupplier liveDistance, BaritoneIntegration backend) {
         this.targetX = x;
         this.targetY = y;
@@ -37,7 +37,7 @@ public final class MoveAction implements AgentAction {
         this.arriveDistance = arriveDistance;
         this.liveDistance = liveDistance;
         this.backend = backend;
-        this.title = "Go to crafting_table";
+        this.title = "Go to " + targetLabel.replaceFirst("^minecraft:", "");
         this.lastDistance = Double.MAX_VALUE;
     }
 

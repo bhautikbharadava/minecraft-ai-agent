@@ -2,7 +2,7 @@ package com.bhautik.mcagent.integration;
 
 import com.bhautik.mcagent.action.BreakBlockAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
-import com.bhautik.mcagent.world.TableLocator;
+import com.bhautik.mcagent.world.BlockLocator;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -37,18 +37,27 @@ public final class VanillaPlacementExecutor {
     private VanillaPlacementExecutor() {
     }
 
-    public static TableLocator tableLocator(ServerPlayer player, int radius) {
-        return new TableLocator() {
+    /** Locator for a specific block item id ("minecraft:crafting_table"). */
+    public static BlockLocator blockLocator(ServerPlayer player, String blockItemId,
+                                            int radius) {
+        var id = net.minecraft.resources.Identifier.tryParse(blockItemId);
+        var block = id == null ? null
+                : net.minecraft.core.registries.BuiltInRegistries.BLOCK.getOptional(id)
+                        .orElse(null);
+        if (block == null) {
+            return BlockLocator.NONE;
+        }
+        return new BlockLocator() {
             @Override
             public boolean isNearby() {
-                return findTable(player, radius) != null;
+                return findBlockNear(player, block, radius) != null;
             }
 
             @Override
-            public Optional<TableLocator.TableSite> nearestWithin(int searchRadius) {
-                BlockPos found = findTable(player, searchRadius);
+            public Optional<BlockLocator.BlockSite> nearestWithin(int searchRadius) {
+                BlockPos found = findBlockNear(player, block, searchRadius);
                 return found == null ? Optional.empty()
-                        : Optional.of(new TableLocator.TableSite(
+                        : Optional.of(new BlockLocator.BlockSite(
                                 found.getX(), found.getY(), found.getZ()));
             }
         };
@@ -160,10 +169,6 @@ public final class VanillaPlacementExecutor {
         return candidates.stream()
                 .min(Comparator.comparingDouble(pos -> pos.distSqr(origin)))
                 .orElse(null);
-    }
-
-    private static BlockPos findTable(ServerPlayer player, int radius) {
-        return findBlockNear(player, Blocks.CRAFTING_TABLE, radius);
     }
 
     /** Nearest position whose state matches {@code block}, or null. */

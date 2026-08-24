@@ -1,12 +1,12 @@
 package com.bhautik.mcagent.action;
 
 import com.bhautik.mcagent.McAgent;
-import com.bhautik.mcagent.world.TableLocator;
+import com.bhautik.mcagent.world.BlockLocator;
 
 /**
  * Places a carried block item into the world near the agent. The action
  * only trusts independent verification: the block must be observable via
- * the supplied {@link TableLocator} before SUCCESS is declared.
+ * the supplied {@link BlockLocator} before SUCCESS is declared.
  */
 public final class PlaceBlockAction implements AgentAction {
     /** Failed placement attempts before the action gives up. */
@@ -29,14 +29,14 @@ public final class PlaceBlockAction implements AgentAction {
 
     private final String itemId;
     private final Placer placer;
-    private final TableLocator verification;
+    private final BlockLocator verification;
 
     private final String title;
     private ActionStatus status = ActionStatus.PENDING;
     private String failureReason;
     private int attempts;
 
-    public PlaceBlockAction(String itemId, Placer placer, TableLocator verification) {
+    public PlaceBlockAction(String itemId, Placer placer, BlockLocator verification) {
         this.itemId = itemId;
         this.placer = placer;
         this.verification = verification;

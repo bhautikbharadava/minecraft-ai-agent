@@ -48,6 +48,17 @@ Implemented:
   agent placed itself are collected afterwards (`BreakBlockAction`,
   verified by cleared block state + returned item); pre-existing
   tables are left untouched.
+- **Smelting (M7):** furnace recipes route through real furnaces —
+  `/agent get iron_ingot 1` plans mine raw iron, mine coal, place a
+  carried/crafted furnace, load both into the furnace's block entity,
+  and let it cook on real game ticks while the action monitors and
+  harvests output (PRD UC-06: never block the thread). Furnaces are
+  walked to when present, placed when missing, and collected after.
+  This completes the iron ladder: `/agent get iron_pickaxe 1` works
+  end-to-end from bare hands (logs → table → wooden pickaxe → stone →
+  stone pickaxe → iron ore → coal → smelt → iron pickaxe), and
+  `/agent get diamond_pickaxe 1` self-provides its entire prerequisite
+  chain including the iron pickaxe needed to mine diamond ore.
 - **Tool ladders:** when a mineable item needs a pickaxe tier the agent
   doesn't have, the planner folds the cheapest qualifying tool's whole
   chain into the plan instead of refusing — `/agent get stone_pickaxe 1`
@@ -57,8 +68,8 @@ Implemented:
   diamonds needing an iron pickaxe while iron requires smelting), the
   refusal explains exactly which link failed.
 
-Not implemented yet: smelting (so `iron_ingot` chains still refuse),
-survival interruptions, exploration goals, LLM integration, or farms.
+Not implemented yet: survival interruptions, exploration goals, LLM
+integration, or farms.
 
 ### Execution backend
 

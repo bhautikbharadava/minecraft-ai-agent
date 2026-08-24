@@ -181,7 +181,7 @@ public final class AgentCli {
         owned.put("minecraft:oak_log", 1);
         List<AgentAction> plan = planner.planAcquisition(resolver,
                 id -> owned.getOrDefault(id, 0), Set.of(), id -> 0,
-                env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE),
+                env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:crafting_table", 1);
         assertEquals(plan.size(), 2, "table chain length");
         if (!(plan.get(0) instanceof CraftAction)) {
@@ -193,7 +193,7 @@ public final class AgentCli {
 
         // sticks x8: need 8 planks -> own 0 logs -> mine 1 log, craft 4 planks, craft 2x sticks
         List<AgentAction> stickPlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE),
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:stick", 8);
         assertEquals(stickPlan.size(), 3, "stick chain length");
         assertContains(stickPlan.get(0).title(), "Mine");
@@ -201,7 +201,7 @@ public final class AgentCli {
 
         try {
             planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
-                    env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE), "minecraft:iron_ingot", 1);
+                    env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:iron_ingot", 1);
             throw new IllegalStateException("smelted goods must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
             assertContains(expected.getMessage(), "no supported acquisition strategy");
@@ -215,7 +215,7 @@ public final class AgentCli {
                 cell("minecraft:stick")));
         try {
             planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
-                    env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE), "minecraft:iron_pickaxe", 1);
+                    env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:iron_pickaxe", 1);
             throw new IllegalStateException("unresolvable table-gated goods must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
             assertContains(expected.getMessage(), "no supported acquisition strategy");
@@ -224,7 +224,7 @@ public final class AgentCli {
         // M6: a craftable table-gated item plans acquire-table -> place ->
         // craft -> pick-the-table-back-up when the world has no table yet.
         List<AgentAction> chestPlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE),
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:chest", 1);
         assertEquals(chestPlan.size(), 6, "chest chain length");
         assertContains(chestPlan.get(0).title(), "Mine");
@@ -241,7 +241,7 @@ public final class AgentCli {
         // With a table already in range, no table acquisition or placement,
         // and the world's table is left alone (no collect step).
         List<AgentAction> nearTablePlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, tableNearby()),
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, blockNearby()),
                 "minecraft:chest", 1);
         assertEquals(nearTablePlan.size(), 3, "near-table chain length");
         if (nearTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)
@@ -253,7 +253,7 @@ public final class AgentCli {
         // A placed table beyond interaction range is walked to, not rebuilt,
         // and pre-existing world tables are never collected.
         List<AgentAction> farTablePlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, tableFarAway()),
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, blockFarAway()),
                 "minecraft:chest", 1);
         assertEquals(farTablePlan.size(), 4, "far-table chain length");
         assertContains(farTablePlan.get(0).title(), "Mine");
@@ -268,7 +268,7 @@ public final class AgentCli {
         }
         double[] distance = {100.0};
         com.bhautik.mcagent.action.MoveAction walking = new com.bhautik.mcagent.action.MoveAction(
-                30, 70, -12, 9.0, () -> distance[0], new FakeBackend());
+                "crafting_table", 30, 70, -12, 9.0, () -> distance[0], new FakeBackend());
         walking.start();
         assertEquals(walking.status(), ActionStatus.RUNNING, "move starts when far");
         distance[0] = 4.0;
@@ -281,7 +281,7 @@ public final class AgentCli {
         carryingTable.put("minecraft:crafting_table", 1);
         List<AgentAction> carriedPlan = planner.planAcquisition(resolver,
                 id -> carryingTable.getOrDefault(id, 0), Set.of(), id -> 0,
-                env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE), "minecraft:chest", 1);
+                env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:chest", 1);
         assertEquals(carriedPlan.size(), 5, "carried-table chain length");
         assertEquals(carriedPlan.get(2).getClass(), PlaceBlockAction.class, "still places carried table");
         assertEquals(carriedPlan.get(4).getClass(),
@@ -290,7 +290,7 @@ public final class AgentCli {
 
         // Multiple table-gated crafts share one placement per plan.
         List<AgentAction> bulkPlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE),
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:chest", 3);
         long placements = bulkPlan.stream()
                 .filter(action -> action instanceof PlaceBlockAction)
@@ -300,7 +300,7 @@ public final class AgentCli {
         // Tool-gated mining with no pickaxe plans the pickaxe chain first:
         // mine log -> planks -> sticks -> place table -> wooden_pickaxe -> mine.
         List<AgentAction> cobblePlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.TableLocator.NONE),
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:cobblestone", 3);
         if (cobblePlan.size() != 8) {
             throw new IllegalStateException("tool-first chain length: expected [8] got ["
@@ -324,7 +324,7 @@ public final class AgentCli {
         recipes.remove("minecraft:wooden_pickaxe");
         try {
             planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
-                    env(crafter, placer, tableNearby()), "minecraft:cobblestone", 3);
+                    env(crafter, placer, blockNearby()), "minecraft:cobblestone", 3);
             throw new IllegalStateException("ungateable mining must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
             assertContains(expected.getMessage(), "cannot plan a wooden_pickaxe");
@@ -335,6 +335,73 @@ public final class AgentCli {
                 cell("minecraft:oak_planks"), SlotSpec.EMPTY,
                 cell("minecraft:stick"), SlotSpec.EMPTY,
                 SlotSpec.EMPTY, cell("minecraft:stick"), SlotSpec.EMPTY));
+
+        // M7: with a furnace route, smelted goods plan furnace access ->
+        // input mining -> fuel mining -> cook -> collect. The agent owns a
+        // stone pickaxe here so no tool chain is needed.
+        Map<String, com.bhautik.mcagent.crafting.SmeltingResolver.SmeltableRecipe> smelting =
+                new HashMap<>();
+        smelting.put("minecraft:iron_ingot",
+                new com.bhautik.mcagent.crafting.SmeltingResolver.SmeltableRecipe(
+                        "minecraft:iron_ingot", List.of("minecraft:raw_iron")));
+        Set<String> miner = Set.of("minecraft:stone_pickaxe");
+        // The agent carries a furnace so the plan places it without
+        // needing the whole furnace-crafting chain in the fake recipes.
+        Map<String, Integer> carryingFurnace = new HashMap<>();
+        carryingFurnace.put("minecraft:furnace", 1);
+        List<AgentAction> ingotPlan = planner.planAcquisition(resolver,
+                id -> carryingFurnace.getOrDefault(id, 0), miner, id -> 0,
+                env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
+                        output -> Optional.ofNullable(smelting.get(output))),
+                "minecraft:iron_ingot", 1);
+        if (ingotPlan.size() != 5) {
+            throw new IllegalStateException("smelt chain length: expected [5] got ["
+                    + ingotPlan.size() + "] " + ingotPlan.stream()
+                            .map(AgentAction::title).toList());
+        }
+        assertEquals(ingotPlan.get(0).getClass(), PlaceBlockAction.class,
+                "furnace placed first");
+        assertContains(ingotPlan.get(1).title(), "iron_ore");
+        assertContains(ingotPlan.get(2).title(), "coal");
+        assertEquals(ingotPlan.get(3).getClass(),
+                com.bhautik.mcagent.action.SmeltAction.class, "cook step");
+        assertEquals(ingotPlan.get(4).getClass(),
+                com.bhautik.mcagent.action.BreakBlockAction.class,
+                "furnace collected last");
+        assertContains(ingotPlan.get(4).title(), "furnace");
+
+        // The iron route still refuses honestly when the furnace path is
+        // missing and only the nugget loop exists.
+        try {
+            planner.planAcquisition(resolver, id -> 0, miner, id -> 0,
+                    env(crafter, placer, blockNearby()), "minecraft:iron_ingot", 1);
+            throw new IllegalStateException("smeltless ingots must fail planning");
+        } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
+            assertContains(expected.getMessage(), "no supported acquisition strategy");
+        }
+
+        // Smelting verifies output against live inventory; a missing
+        // furnace fails fast.
+        int[] ingots = {0};
+        boolean[] furnaceNear = {true};
+        com.bhautik.mcagent.action.SmeltAction smelt =
+                new com.bhautik.mcagent.action.SmeltAction(
+                        "minecraft:raw_iron", "minecraft:coal", 1, () -> ingots[0],
+                        okSmelter(),
+                        () -> furnaceNear[0]);
+        smelt.start();
+        assertEquals(smelt.status(), ActionStatus.RUNNING, "smelt starts running");
+        ingots[0] = 1;
+        smelt.tick();
+        assertEquals(smelt.status(), ActionStatus.SUCCESS, "smelt verified by inventory");
+        com.bhautik.mcagent.action.SmeltAction lostFurnace =
+                new com.bhautik.mcagent.action.SmeltAction(
+                        "minecraft:raw_iron", "minecraft:coal", 1, () -> 0,
+                        okSmelter(),
+                        () -> false);
+        lostFurnace.start();
+        assertEquals(lostFurnace.status(), ActionStatus.FAILED,
+                "missing furnace fails fast");
 
         // Gated crafting fails honestly when the environment check dies.
         CraftAction gated = new CraftAction(recipes.get("minecraft:chest"), 1,
@@ -381,35 +448,68 @@ public final class AgentCli {
         assertContains(String.valueOf(stuck.failureReason()), "within reach");
     }
 
-    /** Builds a planner environment around a given world-table state. */
+    /** Builds a planner environment around a given world-block state. */
     private static com.bhautik.mcagent.planner.Planner.Environment env(
             CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
-            com.bhautik.mcagent.world.TableLocator locator) {
+            com.bhautik.mcagent.world.BlockLocator locator) {
+        return env(crafter, placer, locator, output -> Optional.empty());
+    }
+
+    /** Environment variant with a fake smelting index. */
+    private static com.bhautik.mcagent.planner.Planner.Environment env(
+            CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
+            com.bhautik.mcagent.world.BlockLocator locator,
+            com.bhautik.mcagent.crafting.SmeltingResolver smelting) {
         return new com.bhautik.mcagent.planner.Planner.Environment(
-                crafter, placer,
+                crafter,
+                okSmelter(),
+                placer,
                 itemId -> com.bhautik.mcagent.action.BreakBlockAction.Breaker.Result.ok(),
-                locator, (x, y, z) -> 100.0);
+                new com.bhautik.mcagent.crafting.RecipeResolver() {
+                    @Override public Grid grid() { return Grid.INVENTORY_2X2; }
+                    @Override public Optional<CraftableRecipe> findRecipe(String id) {
+                        return Optional.empty();
+                    }
+                },
+                smelting,
+                locator, locator, (x, y, z) -> 100.0);
+    }
+
+    /** A smelter that always reports success. */
+    private static com.bhautik.mcagent.action.SmeltAction.Smelter okSmelter() {
+        return new com.bhautik.mcagent.action.SmeltAction.Smelter() {
+            @Override
+            public com.bhautik.mcagent.action.SmeltAction.Smelter.Result begin(
+                    String inputItemId, int inputCount, String fuelItemId, int fuelCount) {
+                return com.bhautik.mcagent.action.SmeltAction.Smelter.Result.ok();
+            }
+
+            @Override
+            public com.bhautik.mcagent.action.SmeltAction.Smelter.Result harvest() {
+                return com.bhautik.mcagent.action.SmeltAction.Smelter.Result.ok();
+            }
+        };
     }
 
     /** A table right next to the agent. */
-    private static com.bhautik.mcagent.world.TableLocator tableNearby() {
-        return new com.bhautik.mcagent.world.TableLocator() {
+    private static com.bhautik.mcagent.world.BlockLocator blockNearby() {
+        return new com.bhautik.mcagent.world.BlockLocator() {
             @Override public boolean isNearby() { return true; }
-            @Override public Optional<com.bhautik.mcagent.world.TableLocator.TableSite>
+            @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
                     nearestWithin(int radius) {
-                return Optional.of(new com.bhautik.mcagent.world.TableLocator.TableSite(1, 64, 0));
+                return Optional.of(new com.bhautik.mcagent.world.BlockLocator.BlockSite(1, 64, 0));
             }
         };
     }
 
     /** A table too far to use but close enough to walk to. */
-    private static com.bhautik.mcagent.world.TableLocator tableFarAway() {
-        return new com.bhautik.mcagent.world.TableLocator() {
+    private static com.bhautik.mcagent.world.BlockLocator blockFarAway() {
+        return new com.bhautik.mcagent.world.BlockLocator() {
             @Override public boolean isNearby() { return false; }
-            @Override public Optional<com.bhautik.mcagent.world.TableLocator.TableSite>
+            @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
                     nearestWithin(int radius) {
                 return radius >= 48
-                        ? Optional.of(new com.bhautik.mcagent.world.TableLocator.TableSite(30, 70, -12))
+                        ? Optional.of(new com.bhautik.mcagent.world.BlockLocator.BlockSite(30, 70, -12))
                         : Optional.empty();
             }
         };

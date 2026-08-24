@@ -6,16 +6,19 @@ import com.bhautik.mcagent.action.CraftAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.action.MoveAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
+import com.bhautik.mcagent.action.SmeltAction;
 import com.bhautik.mcagent.crafting.RecipeResolver;
+import com.bhautik.mcagent.crafting.SmeltingResolver;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
+import com.bhautik.mcagent.world.BlockLocator;
 import com.bhautik.mcagent.world.DistanceSensor;
-import com.bhautik.mcagent.world.TableLocator;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,35 +28,49 @@ import java.util.function.ToIntFunction;
 
 /**
  * Expands a resource gap into an ordered action list by resolving
- * dependencies recursively: mine what is directly acquirable, craft the
- * rest from real vanilla recipes, always crediting current inventory.
+ * dependencies recursively, always crediting current inventory:
+ * mine what is directly acquirable, then smelt what has a furnace
+ * recipe, then craft the rest from real vanilla recipes.
+ *
+ * Smelting is preferred over crafting for smeltable outputs because
+ * their only crafting routes are closed loops (nuggets <-> ingots);
+ * ores enter the plan through mining instead.
  *
  * Emitted plans are post-order: dependencies appear before dependents,
  * which lets the single-action runner execute them sequentially.
  *
  * Recipes wider or taller than the inventory grid insert crafting-table
- * steps: acquire a table item, place it once per plan (skipped entirely
- * when a table is already within range), then craft against it.
+ * steps; furnace recipes insert furnace steps. Utility blocks are walked
+ * to when one exists nearby, otherwise acquired, placed once per plan,
+ * and collected again at the end.
  */
 public final class Planner {
-    /** The one block item the agent currently knows how to place. */
+    /** The block item the agent uses for 3x3 crafting. */
     public static final String CRAFTING_TABLE_ITEM = "minecraft:crafting_table";
+    /** The block item the agent uses for smelting. */
+    public static final String FURNACE_ITEM = "minecraft:furnace";
+    /** Standard fuel the planner demands for furnace runs. */
+    public static final String FUEL_ITEM = "minecraft:coal";
 
-    /** How far the agent will walk to reach an existing crafting table. */
-    public static final int TABLE_SEARCH_RADIUS = 48;
+    /** How far the agent will walk to reach an existing utility block. */
+    public static final int BLOCK_SEARCH_RADIUS = 48;
 
-    /** Blocks (squared) considered close enough to craft at a table. */
-    public static final double TABLE_ARRIVE_DISTANCE_SQ = 9.0;
+    /** Blocks (squared) considered close enough to use a utility block. */
+    public static final double BLOCK_ARRIVE_DISTANCE_SQ = 9.0;
 
     /**
      * Execution seams handed to emitted actions: real grid crafting,
-     * real block placement and collection, world checks that verify
-     * both, and live distances for navigation verification.
+     * real furnace cooking, real block placement and collection, world
+     * checks that verify all of it, and live distances for navigation.
      */
     public record Environment(CraftAction.Crafter crafter,
+                              SmeltAction.Smelter smelter,
                               PlaceBlockAction.Placer placer,
                               BreakBlockAction.Breaker breaker,
-                              TableLocator tableLocator,
+                              RecipeResolver resolver,
+                              SmeltingResolver smeltingResolver,
+                              BlockLocator tableLocator,
+                              BlockLocator furnaceLocator,
                               DistanceSensor distanceSensor) {
     }
 
@@ -75,7 +92,7 @@ public final class Planner {
      *                      what the player already owns)
      * @param ownedItemIds  inventory item ids used for tool gating
      * @param liveCounts    live counts per item id, for action verification
-     * @param environment   execution seams for crafting and placement
+     * @param environment   execution seams for crafting, smelting, placement
      */
     public List<AgentAction> planAcquisition(RecipeResolver resolver,
                                              Function<String, Integer> plannedCounts,
@@ -87,17 +104,19 @@ public final class Planner {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
         expansion.expand(itemId, targetCount);
-        // A table this plan placed is picked back up once everything else
-        // ran; pre-existing world tables are left where they are.
-        if (expansion.placedTable) {
-            expansion.plan.add(new BreakBlockAction(CRAFTING_TABLE_ITEM,
+        // Blocks this plan placed are picked back up once everything else
+        // ran; pre-existing world blocks are left where they are.
+        for (String placed : expansion.placedBlocks) {
+            BlockLocator locator = placed.equals(CRAFTING_TABLE_ITEM)
+                    ? environment.tableLocator() : environment.furnaceLocator();
+            expansion.plan.add(new BreakBlockAction(placed,
                     environment.breaker(),
-                    () -> liveCounts.applyAsInt(CRAFTING_TABLE_ITEM)));
+                    () -> liveCounts.applyAsInt(placed)));
         }
         return expansion.plan;
     }
 
-    /** Per-plan state: output list, cycle guard, and table dedup flag. */
+    /** Per-plan state: output list, cycle guard, and block bookkeeping. */
     private final class Expansion {
         private final RecipeResolver resolver;
         private final Function<String, Integer> plannedCounts;
@@ -112,9 +131,8 @@ public final class Planner {
         /** Items whose tool gate is currently being satisfied up-tree,
          * guarding against circular tool requirements. */
         private final Set<String> toolChains = new HashSet<>();
-        private boolean tableHandled;
-        /** True when this plan itself placed a table (vs walked to one). */
-        private boolean placedTable;
+        /** Blocks this plan itself placed, in order (dedups placement). */
+        private final Set<String> placedBlocks = new LinkedHashSet<>();
 
         private Expansion(RecipeResolver resolver, Function<String, Integer> plannedCounts,
                           Set<String> ownedItemIds, ToIntFunction<String> liveCounts,
@@ -148,9 +166,38 @@ public final class Planner {
             if (!visiting.add(itemId)) {
                 throw new PlanningException("circular dependency on " + itemId);
             }
+            var smeltable = environment.smeltingResolver().findSmelting(itemId).orElse(null);
+            if (smeltable != null) {
+                expandSmelting(itemId, missing, smeltable);
+                visiting.remove(itemId);
+                produced.merge(itemId, missing, Integer::sum);
+                return;
+            }
             RecipeResolver.CraftableRecipe recipe = resolver.findRecipe(itemId)
                     .orElseThrow(() -> new PlanningException(
                             "no supported acquisition strategy for " + itemId));
+            expandCrafting(itemId, missing, recipe);
+            visiting.remove(itemId);
+            produced.merge(itemId, ceilDiv(missing, recipe.resultCount())
+                    * recipe.resultCount(), Integer::sum);
+        }
+
+        /** Furnace route: secure a furnace, then input and fuel, then cook. */
+        private void expandSmelting(String itemId, int missing,
+                                    SmeltingResolver.SmeltableRecipe smeltable) {
+            String input = smeltable.representativeInput();
+            planBlockAccess(FURNACE_ITEM, environment.furnaceLocator());
+            expand(input, missing);
+            expand(FUEL_ITEM, ceilDiv(missing, SmeltAction.ITEMS_PER_FUEL));
+            BooleanSupplier furnaceGate = environment.furnaceLocator()::isNearby;
+            plan.add(new SmeltAction(input, FUEL_ITEM, missing,
+                    () -> liveCounts.applyAsInt(itemId),
+                    environment.smelter(), furnaceGate));
+        }
+
+        /** Grid route: aggregate ingredient slots, secure a table, craft. */
+        private void expandCrafting(String itemId, int missing,
+                                    RecipeResolver.CraftableRecipe recipe) {
             int crafts = ceilDiv(missing, recipe.resultCount());
             // Aggregate identical ingredient slots first (UC-09: shared
             // dependencies are deduplicated, e.g. 4 plank slots -> one demand).
@@ -166,46 +213,37 @@ public final class Planner {
                 expand(demand.getKey(), demand.getValue() * crafts);
             }
             if (recipe.requiresTable()) {
-                planTableAccess();
+                planBlockAccess(CRAFTING_TABLE_ITEM, environment.tableLocator());
             }
-            visiting.remove(itemId);
             BooleanSupplier tableGate = recipe.requiresTable()
                     ? environment.tableLocator()::isNearby
                     : null;
             plan.add(new CraftAction(recipe, crafts, () -> liveCounts.applyAsInt(itemId),
                     environment.crafter(), tableGate));
-            produced.merge(itemId, crafts * recipe.resultCount(), Integer::sum);
         }
 
         /**
-         * Guarantees the plan reaches a crafting table before any gated
-         * craft: walk to an existing one when possible, otherwise acquire
-         * a table item and place it — at most one placement per plan.
+         * Guarantees the plan reaches a utility block before any gated
+         * step: walk to an existing one when possible, otherwise acquire
+         * the item and place it — at most one placement per block per
+         * plan. Walks may repeat; arrival checks make repeats free.
          */
-        private void planTableAccess() {
-            if (environment.tableLocator().isNearby()) {
-                tableHandled = true; // already in range, nothing to emit
+        private void planBlockAccess(String blockItemId, BlockLocator locator) {
+            if (locator.isNearby()) {
                 return;
             }
-            environment.tableLocator().nearestWithin(TABLE_SEARCH_RADIUS).ifPresentOrElse(
-                    site -> {
-                        // Walk to it. Emitted per gated branch that needs
-                        // it; arrival checks make repeats free.
-                        TableLocator.TableSite target = site;
-                        plan.add(new MoveAction(target.x(), target.y(), target.z(),
-                                TABLE_ARRIVE_DISTANCE_SQ,
-                                () -> environment.distanceSensor()
-                                        .distanceSquaredTo(target.x(), target.y(), target.z()),
-                                baritoneIntegration));
-                    },
+            locator.nearestWithin(BLOCK_SEARCH_RADIUS).ifPresentOrElse(
+                    site -> plan.add(new MoveAction(blockItemId,
+                            site.x(), site.y(), site.z(),
+                            BLOCK_ARRIVE_DISTANCE_SQ,
+                            () -> environment.distanceSensor()
+                                    .distanceSquaredTo(site.x(), site.y(), site.z()),
+                            baritoneIntegration)),
                     () -> {
-                        // No table anywhere near: build one exactly once.
-                        expand(CRAFTING_TABLE_ITEM, 1);
-                        if (!tableHandled) {
-                            plan.add(new PlaceBlockAction(CRAFTING_TABLE_ITEM,
-                                    environment.placer(), environment.tableLocator()));
-                            tableHandled = true;
-                            placedTable = true;
+                        expand(blockItemId, 1);
+                        if (placedBlocks.add(blockItemId)) {
+                            plan.add(new PlaceBlockAction(blockItemId,
+                                    environment.placer(), locator));
                         }
                     });
         }

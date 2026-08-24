@@ -213,10 +213,19 @@ public final class GoalService {
             var countsNow = InventoryState.collect(player).itemCounts();
             var environment = new com.bhautik.mcagent.planner.Planner.Environment(
                     VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                    com.bhautik.mcagent.crafting.VanillaSmelter.forPlayer(player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.breaker(player,
                             com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.tableLocator(player,
+                    new VanillaRecipeResolver(activeRun.server,
+                            com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
+                    new com.bhautik.mcagent.crafting.VanillaSmeltingResolver(activeRun.server),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                            com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                            com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
                             com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                     (x, y, z) -> player.distanceToSqr(x, y, z));
             List<AgentAction> actions = executor.planner().planAcquisition(
