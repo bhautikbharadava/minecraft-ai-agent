@@ -36,6 +36,11 @@ public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
     private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
+    /** Gatherable foods the agent plans for itself when starving. */
+    private static final List<String> EMERGENCY_FOODS = List.of(
+            "minecraft:sweet_berries", "minecraft:brown_mushroom",
+            "minecraft:red_mushroom");
+    private static final int EMERGENCY_FOOD_COUNT = 8;
 
     /** JVM-only fallback used by the CLI smoke checks; in-game resolution uses the live registry. */
     private final ItemRegistry itemRegistry = ItemRegistry.vanillaDefaults();
@@ -161,7 +166,10 @@ public final class GoalService {
      */
     private void handleSurvival(ActiveRun activeRun, ServerPlayer player) {
         Threat threat = activeRun.survivalMonitor.assess();
-        if (!threat.emergency() || activeRun.recovering) {
+        if (!threat.emergency() || activeRun.recovering || activeRun.securingFood) {
+            // While gathering emergency food the interruption system
+            // stands down — otherwise it would suspend the very steps
+            // that fetch the food.
             return;
         }
         AgentAction suspended = executor.suspendCurrent(threat.reason());
@@ -191,8 +199,12 @@ public final class GoalService {
             run = null;
             return;
         }
-        if (finished instanceof com.bhautik.mcagent.action.RecoverAction) {
+        if (finished instanceof RecoverAction) {
             activeRun.recovering = false;
+            if (finished.status() == ActionStatus.SUCCESS) {
+                activeRun.needsEmergencyFood = false;
+                activeRun.securingFood = false;
+            }
             McAgent.LOGGER.info("[Recovery] Survival step finished ({}); resuming plan",
                     finished.status().toString().toLowerCase());
         }
@@ -203,6 +215,14 @@ public final class GoalService {
             case FAILED -> {
                 McAgent.LOGGER.warn("[Recovery] Action failed: {} ({})",
                         finished.title(), finished.failureReason());
+                if (finished instanceof RecoverAction
+                        && String.valueOf(finished.failureReason())
+                                .contains(com.bhautik.mcagent.action.RecoverAction.NO_FOOD_MARKER)) {
+                    // Starving with empty pockets: the next plan gathers
+                    // emergency food before trying to recover again.
+                    activeRun.needsEmergencyFood = true;
+                    McAgent.LOGGER.info("[Recovery] No food in inventory; planning foraged meals");
+                }
                 if (finished.bestEffort()) {
                     // Cleanup steps never cost an attempt or sink the goal.
                     McAgent.LOGGER.info("[Recovery] Best-effort step failed; continuing: {}",
@@ -238,13 +258,15 @@ public final class GoalService {
 
     /** Plans from scratch and fills the run's action queue. */
     private boolean replan(ActiveRun activeRun) {
+        // Reset pipeline flags first; planFor re-secures food if needed.
+        activeRun.recovering = false;
+        activeRun.securingFood = false;
         List<AgentAction> actions = planFor(activeRun);
         if (actions.isEmpty()) {
             return false;
         }
         activeRun.attempts++;
         activeRun.queue.clear();
-        activeRun.recovering = false; // fresh queue, no stale recovery steps
         activeRun.queue.addAll(actions);
         return launchNextAction();
     }
@@ -292,6 +314,18 @@ public final class GoalService {
                     environment,
                     activeRun.item.id(),
                     activeRun.requested);
+            if (activeRun.needsEmergencyFood) {
+                List<AgentAction> forage = forageEmergencyFood(environment);
+                if (!forage.isEmpty()) {
+                    // Food first; the interruption system stands down
+                    // (securingFood) until the recovery step consumes it.
+                    actions.addAll(0, forage);
+                    actions.add(new RecoverAction(activeRun.survivalMonitor,
+                            VanillaSurvivalMonitor.feeder(player)));
+                    activeRun.securingFood = true;
+                }
+                activeRun.needsEmergencyFood = false;
+            }
             if (actions.isEmpty()) {
                 activeRun.goal.markFailed(
                         "no supported acquisition strategy for " + activeRun.item.id());
@@ -304,6 +338,36 @@ public final class GoalService {
             activeRun.goal.markFailed(planningFailure.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Plans gathering the first resolvable emergency food (berries,
+     * mushrooms). Empty when none of the candidates can be resolved.
+     */
+    private List<AgentAction> forageEmergencyFood(
+            com.bhautik.mcagent.planner.Planner.Environment environment) {
+        ActiveRun activeRun = run;
+        var countsNow = InventoryState.collect(
+                activeRun.server.getPlayerList().getPlayer(activeRun.playerId)).itemCounts();
+        for (String foodId : EMERGENCY_FOODS) {
+            try {
+                List<AgentAction> plan = executor.planner().planAcquisition(
+                        new VanillaRecipeResolver(activeRun.server,
+                                com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
+                        id -> countsNow.getOrDefault(id, 0),
+                        countsNow.keySet(),
+                        itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                        environment, foodId, EMERGENCY_FOOD_COUNT);
+                if (!plan.isEmpty()) {
+                    McAgent.LOGGER.info("[Planner] Emergency food plan: {}",
+                            plan.stream().map(AgentAction::title).toList());
+                    return plan;
+                }
+            } catch (com.bhautik.mcagent.planner.Planner.PlanningException ignored) {
+                // try the next candidate food
+            }
+        }
+        return List.of();
     }
 
     private String finishWithFailure(ActiveRun activeRun) {
@@ -375,6 +439,10 @@ public final class GoalService {
         long tickCount;
         /** True while a survival recovery step is in the pipeline. */
         boolean recovering;
+        /** Set when a recovery starved; next plan gathers food first. */
+        boolean needsEmergencyFood;
+        /** True while the queue works through gathered emergency food. */
+        boolean securingFood;
 
         ActiveRun(GetItemGoal goal, MinecraftItem item, UUID playerId, int requested,
                   dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,

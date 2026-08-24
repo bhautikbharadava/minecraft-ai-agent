@@ -13,6 +13,8 @@ import com.bhautik.mcagent.survival.Threat;
 public final class RecoverAction implements AgentAction {
     /** Ticks allowed to reach a non-emergency state before giving up. */
     public static final int TIMEOUT_TICKS = 30 * 20;
+    /** Marker in failure reasons when nothing edible was carried. */
+    public static final String NO_FOOD_MARKER = "; carried no edible food";
 
     /** Eats the best available food; returns nutrition applied (0 if none). */
     public interface Feeder {
@@ -78,7 +80,7 @@ public final class RecoverAction implements AgentAction {
         ticks++;
         if (ticks > TIMEOUT_TICKS) {
             fail("still critical after " + (TIMEOUT_TICKS / 20) + "s"
-                    + (ateSomething ? "" : "; carried no edible food"));
+                    + (ateSomething ? "" : NO_FOOD_MARKER));
         }
     }
 
