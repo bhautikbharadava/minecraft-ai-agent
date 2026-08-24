@@ -182,16 +182,16 @@ public final class Planner {
                     * recipe.resultCount(), Integer::sum);
         }
 
-        /** Furnace route: secure a furnace, then input and fuel, then cook.
-         * Among the recipe's accepted inputs we plan the first one the
-         * agent can actually resolve — e.g. raw iron over deepslate ore,
-         * which vanilla also accepts but the agent cannot gather. */
+        /** Furnace route: gather input and fuel FIRST, then secure the
+         * furnace — placement must happen after every mining step, or
+         * Baritone will dig through the freshly placed block on its way
+         * to ore veins. */
         private void expandSmelting(String itemId, int missing,
                                     SmeltingResolver.SmeltableRecipe smeltable) {
             String input = pickResolvableInput(smeltable);
-            planBlockAccess(FURNACE_ITEM, environment.furnaceLocator());
             expand(input, missing);
             expand(FUEL_ITEM, ceilDiv(missing, SmeltAction.ITEMS_PER_FUEL));
+            planBlockAccess(FURNACE_ITEM, environment.furnaceLocator());
             BooleanSupplier furnaceGate = environment.furnaceLocator()::isNearby;
             plan.add(new SmeltAction(input, FUEL_ITEM, missing,
                     () -> liveCounts.applyAsInt(itemId),

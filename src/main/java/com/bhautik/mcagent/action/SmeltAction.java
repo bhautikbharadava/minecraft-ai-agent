@@ -110,16 +110,21 @@ public final class SmeltAction implements AgentAction {
             McAgent.LOGGER.info("[Action] Verified success: {} (inventory {})", title, count);
             return;
         }
-        if (!furnaceInRange.getAsBoolean()) {
-            fail("furnace is no longer within range");
-            return;
-        }
         if (!begun) {
+            // Loading is the only step that strictly needs proximity.
+            if (!furnaceInRange.getAsBoolean()) {
+                fail("furnace is not within range");
+                return;
+            }
             issue();
             return;
         }
-        // Keep pulling finished stacks out of the furnace.
-        smelter.harvest();
+        // The furnace cooks autonomously; drifting out of range must not
+        // abort the run. Harvest opportunistically whenever we are close,
+        // and judge completion purely by live inventory.
+        if (furnaceInRange.getAsBoolean()) {
+            smelter.harvest();
+        }
         if (count > lastCount) {
             lastCount = count;
             idleTicks = 0;

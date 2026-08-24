@@ -30,7 +30,7 @@ import java.util.UUID;
  */
 public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
-    private static final int MAX_PLAN_ATTEMPTS = 2;
+    private static final int MAX_PLAN_ATTEMPTS = 3;
 
     /** JVM-only fallback used by the CLI smoke checks; in-game resolution uses the live registry. */
     private final ItemRegistry itemRegistry = ItemRegistry.vanillaDefaults();

@@ -360,10 +360,12 @@ public final class AgentCli {
                     + ingotPlan.size() + "] " + ingotPlan.stream()
                             .map(AgentAction::title).toList());
         }
-        assertEquals(ingotPlan.get(0).getClass(), PlaceBlockAction.class,
-                "furnace placed first");
-        assertContains(ingotPlan.get(1).title(), "iron_ore");
-        assertContains(ingotPlan.get(2).title(), "coal");
+        // Gathering happens before placement so Baritone never mines
+        // through the freshly placed furnace.
+        assertContains(ingotPlan.get(0).title(), "iron_ore");
+        assertContains(ingotPlan.get(1).title(), "coal");
+        assertEquals(ingotPlan.get(2).getClass(), PlaceBlockAction.class,
+                "furnace placed only after mining");
         assertEquals(ingotPlan.get(3).getClass(),
                 com.bhautik.mcagent.action.SmeltAction.class, "cook step");
         assertEquals(ingotPlan.get(4).getClass(),
@@ -403,6 +405,27 @@ public final class AgentCli {
         lostFurnace.start();
         assertEquals(lostFurnace.status(), ActionStatus.FAILED,
                 "missing furnace fails fast");
+
+        // Drifting away mid-cook is tolerated: the furnace cooks on its
+        // own, so only the cook-time timeout may end the run.
+        boolean[] driftFurnaceNear = {true};
+        int[] cooked = {0};
+        com.bhautik.mcagent.action.SmeltAction drifts =
+                new com.bhautik.mcagent.action.SmeltAction(
+                        "minecraft:raw_iron", "minecraft:coal", 1, () -> cooked[0],
+                        okSmelter(),
+                        () -> driftFurnaceNear[0]);
+        drifts.start();
+        assertEquals(drifts.status(), ActionStatus.RUNNING, "smelt starts running");
+        drifts.tick();
+        assertEquals(drifts.status(), ActionStatus.RUNNING, "furnace loaded");
+        driftFurnaceNear[0] = false;
+        for (int i = 0; i <= com.bhautik.mcagent.action.SmeltAction.WARMUP_TICKS
+                + com.bhautik.mcagent.action.SmeltAction.COOK_TICKS_PER_ITEM + 2; i++) {
+            drifts.tick();
+        }
+        assertEquals(drifts.status(), ActionStatus.FAILED, "timeout ends a dead run");
+        assertContains(String.valueOf(drifts.failureReason()), "produced no output");
 
         // Gated crafting fails honestly when the environment check dies.
         CraftAction gated = new CraftAction(recipes.get("minecraft:chest"), 1,
