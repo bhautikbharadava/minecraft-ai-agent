@@ -38,6 +38,7 @@ public final class AgentCli {
             validateMineActionLifecycle();
             validateAcquisitionTable();
             validateDependencyPlanning();
+            validateSurvivalInterruptions();
             return;
         }
         System.out.println(handler.handle(String.join(" ", args)));
@@ -552,6 +553,75 @@ public final class AgentCli {
                         : Optional.empty();
             }
         };
+    }
+
+    /**
+     * M8 checks: recovery waits out emergencies, eats while waiting,
+     * times out honestly when nothing helps, and the executor suspends
+     * (not cancels) running actions so they can be re-queued.
+     */
+    private static void validateSurvivalInterruptions() {
+        boolean[] emergency = {true};
+        int[] meals = {0};
+        com.bhautik.mcagent.action.RecoverAction recover =
+                new com.bhautik.mcagent.action.RecoverAction(
+                        () -> emergency[0]
+                                ? com.bhautik.mcagent.survival.Threat.emergency("health critical")
+                                : com.bhautik.mcagent.survival.Threat.NONE,
+                        () -> {
+                            meals[0]++;
+                            return 4;
+                        });
+        recover.start();
+        assertEquals(recover.status(), ActionStatus.RUNNING, "recovery starts");
+        for (int i = 0; i < 40 && recover.status() == ActionStatus.RUNNING; i++) {
+            if (i == 5) {
+                emergency[0] = false; // food kicks in, health recovers
+            }
+            recover.tick();
+        }
+        assertEquals(recover.status(), ActionStatus.SUCCESS, "recovers once emergency ends");
+        if (meals[0] == 0) {
+            throw new IllegalStateException("recovery must keep eating while critical");
+        }
+
+        // Starving with no food: timeout fails with an honest reason.
+        com.bhautik.mcagent.action.RecoverAction starving =
+                new com.bhautik.mcagent.action.RecoverAction(
+                        () -> com.bhautik.mcagent.survival.Threat.emergency("starving"),
+                        () -> 0);
+        starving.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.RecoverAction.TIMEOUT_TICKS + 1; i++) {
+            starving.tick();
+        }
+        assertEquals(starving.status(), ActionStatus.FAILED, "unrecoverable fails on timeout");
+        assertContains(String.valueOf(starving.failureReason()), "no edible food");
+
+        // Suspension pauses without cancelling: the action comes back
+        // re-launchable and the backend was told to stop.
+        FakeBackend survivalBackend = new FakeBackend();
+        int[] ore = {0};
+        MineAction minable = new MineAction("minecraft:diamond_ore", 0, 3, () -> ore[0],
+                survivalBackend);
+        com.bhautik.mcagent.executor.AgentExecutor exec =
+                new com.bhautik.mcagent.executor.AgentExecutor(
+                        new com.bhautik.mcagent.planner.Planner(survivalBackend),
+                        survivalBackend);
+        exec.launch(minable);
+        assertEquals(exec.busy(), true, "action running before suspension");
+        AgentAction suspended = exec.suspendCurrent("test emergency");
+        assertEquals(exec.busy(), false, "executor idle after suspension");
+        if (suspended == null || suspended != minable) {
+            throw new IllegalStateException("suspend must return the paused action");
+        }
+        if (minable.status() != ActionStatus.RUNNING) {
+            throw new IllegalStateException("pause must keep the action non-terminal");
+        }
+        // Relaunching the very same instance resumes ticking safely.
+        exec.launch(minable);
+        ore[0] = 3;
+        exec.tick();
+        assertEquals(minable.status(), ActionStatus.SUCCESS, "relaunched action completes");
     }
 
     private static SlotSpec cell(String itemId) {

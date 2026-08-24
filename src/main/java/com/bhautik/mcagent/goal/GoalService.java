@@ -3,10 +3,13 @@ package com.bhautik.mcagent.goal;
 import com.bhautik.mcagent.McAgent;
 import com.bhautik.mcagent.action.ActionStatus;
 import com.bhautik.mcagent.action.AgentAction;
+import com.bhautik.mcagent.action.RecoverAction;
 import com.bhautik.mcagent.crafting.VanillaCraftingExecutor;
 import com.bhautik.mcagent.crafting.VanillaRecipeResolver;
 import com.bhautik.mcagent.executor.AgentExecutor;
+import com.bhautik.mcagent.integration.VanillaSurvivalMonitor;
 import com.bhautik.mcagent.state.InventoryState;
+import com.bhautik.mcagent.survival.Threat;
 import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.goal.GetItemGoal;
 import dev.minecraftai.agent.goal.GoalStatus;
@@ -32,6 +35,7 @@ import java.util.UUID;
 public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
+    private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
 
     /** JVM-only fallback used by the CLI smoke checks; in-game resolution uses the live registry. */
     private final ItemRegistry itemRegistry = ItemRegistry.vanillaDefaults();
@@ -82,7 +86,8 @@ public final class GoalService {
                 return goal.progressReport();
             }
             run = new ActiveRun(goal, item, player.getUUID(), requestedCount,
-                    snapshot, player.level().getServer());
+                    snapshot, player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
             if (!replan(run)) {
                 return finishWithFailure(run);
             }
@@ -131,15 +136,44 @@ public final class GoalService {
                 abandonRun("player left the server");
                 return;
             }
-            executor.tick();
 
             run.tickCount++;
+            if (run.tickCount % SURVIVAL_CHECK_INTERVAL_TICKS == 0) {
+                handleSurvival(run, player);
+            }
+            if (run == null) {
+                return;
+            }
+            executor.tick();
+
             if (run.tickCount % PROGRESS_REFRESH_INTERVAL_TICKS == 0) {
                 refreshSnapshot(player);
             }
 
             executor.pollFinished().ifPresent(finished -> handleFinishedAction(player, finished));
         }
+    }
+
+    /**
+     * Survival outranks the active goal (PRD 15): on emergency the
+     * current action is paused and re-queued, and a recovery step jumps
+     * the queue. When it succeeds, the original action relaunches fresh.
+     */
+    private void handleSurvival(ActiveRun activeRun, ServerPlayer player) {
+        Threat threat = activeRun.survivalMonitor.assess();
+        if (!threat.emergency() || activeRun.recovering) {
+            return;
+        }
+        AgentAction suspended = executor.suspendCurrent(threat.reason());
+        if (suspended != null) {
+            activeRun.queue.addFirst(suspended);
+        }
+        activeRun.queue.addFirst(new RecoverAction(activeRun.survivalMonitor,
+                VanillaSurvivalMonitor.feeder(player)));
+        activeRun.recovering = true;
+        McAgent.LOGGER.warn("[Recovery] Survival interrupt ({}); recovering before resuming",
+                threat.reason());
+        launchNextAction();
     }
 
     private void handleFinishedAction(ServerPlayer player, AgentAction finished) {
@@ -156,6 +190,11 @@ public final class GoalService {
             McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
             run = null;
             return;
+        }
+        if (finished instanceof com.bhautik.mcagent.action.RecoverAction) {
+            activeRun.recovering = false;
+            McAgent.LOGGER.info("[Recovery] Survival step finished ({}); resuming plan",
+                    finished.status().toString().toLowerCase());
         }
         switch (finished.status()) {
             case CANCELLED -> {
@@ -205,6 +244,7 @@ public final class GoalService {
         }
         activeRun.attempts++;
         activeRun.queue.clear();
+        activeRun.recovering = false; // fresh queue, no stale recovery steps
         activeRun.queue.addAll(actions);
         return launchNextAction();
     }
@@ -330,17 +370,22 @@ public final class GoalService {
         final int requested;
         final dev.minecraftai.agent.world.InventoryState snapshot;
         final MinecraftServer server;
+        final com.bhautik.mcagent.survival.SurvivalMonitor survivalMonitor;
         int attempts;
         long tickCount;
+        /** True while a survival recovery step is in the pipeline. */
+        boolean recovering;
 
         ActiveRun(GetItemGoal goal, MinecraftItem item, UUID playerId, int requested,
-                  dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server) {
+                  dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,
+                  com.bhautik.mcagent.survival.SurvivalMonitor survivalMonitor) {
             this.goal = goal;
             this.item = item;
             this.playerId = playerId;
             this.requested = requested;
             this.snapshot = snapshot;
             this.server = server;
+            this.survivalMonitor = survivalMonitor;
         }
     }
 }

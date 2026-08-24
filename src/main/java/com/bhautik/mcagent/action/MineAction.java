@@ -101,6 +101,11 @@ public final class MineAction implements AgentAction {
     }
 
     @Override
+    public void pause() {
+        backend.stop();
+    }
+
+    @Override
     public void cancel() {
         if (!status.terminal()) {
             backend.stop();

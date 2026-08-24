@@ -59,6 +59,13 @@ Implemented:
   stone pickaxe → iron ore → coal → smelt → iron pickaxe), and
   `/agent get diamond_pickaxe 1` self-provides its entire prerequisite
   chain including the iron pickaxe needed to mine diamond ore.
+- **Survival interruptions (M8):** every half second the active run is
+  assessed (health ≤ 4 hearts or hunger ≤ 3 suspends work). On
+  emergency the current action is *paused* — navigation stopped, state
+  kept — re-queued, and a recovery step jumps the queue: eat the most
+  nutritious food carried, wait out the danger, then resume where it
+  left off. Starving with no food fails the goal honestly after a
+  timeout instead of mining until death.
 - **Tool ladders:** when a mineable item needs a pickaxe tier the agent
   doesn't have, the planner folds the cheapest qualifying tool's whole
   chain into the plan instead of refusing — `/agent get stone_pickaxe 1`
