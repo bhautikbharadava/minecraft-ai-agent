@@ -215,7 +215,8 @@ public final class GoalService {
                     VanillaCraftingExecutor.forPlayer(player, activeRun.server),
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.tableLocator(player,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS));
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                    (x, y, z) -> player.distanceToSqr(x, y, z));
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),

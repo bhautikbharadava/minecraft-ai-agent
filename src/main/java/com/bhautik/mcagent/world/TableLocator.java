@@ -1,13 +1,32 @@
 package com.bhautik.mcagent.world;
 
+import java.util.Optional;
+
 /**
- * Planning/execution seam answering one world question: is a crafting
- * table within interaction range? Implemented against the live level by
- * the integration layer; faked in JVM smoke checks.
+ * World seam answering two questions about crafting tables: is one in
+ * interaction range right now, and where is the nearest one within a
+ * search radius (so plans can walk to it instead of building another).
  */
-@FunctionalInterface
 public interface TableLocator {
-    TableLocator NONE = () -> false;
+
+    TableLocator NONE = new TableLocator() {
+        @Override
+        public boolean isNearby() {
+            return false;
+        }
+
+        @Override
+        public Optional<TableSite> nearestWithin(int radius) {
+            return Optional.empty();
+        }
+    };
 
     boolean isNearby();
+
+    /** Nearest table within {@code radius} blocks, if any. */
+    Optional<TableSite> nearestWithin(int radius);
+
+    /** Framework-free block position. */
+    record TableSite(int x, int y, int z) {
+    }
 }

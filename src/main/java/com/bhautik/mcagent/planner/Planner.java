@@ -3,10 +3,12 @@ package com.bhautik.mcagent.planner;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.CraftAction;
 import com.bhautik.mcagent.action.MineAction;
+import com.bhautik.mcagent.action.MoveAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
 import com.bhautik.mcagent.crafting.RecipeResolver;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
+import com.bhautik.mcagent.world.DistanceSensor;
 import com.bhautik.mcagent.world.TableLocator;
 
 import java.util.ArrayList;
@@ -36,13 +38,21 @@ public final class Planner {
     /** The one block item the agent currently knows how to place. */
     public static final String CRAFTING_TABLE_ITEM = "minecraft:crafting_table";
 
+    /** How far the agent will walk to reach an existing crafting table. */
+    public static final int TABLE_SEARCH_RADIUS = 48;
+
+    /** Blocks (squared) considered close enough to craft at a table. */
+    public static final double TABLE_ARRIVE_DISTANCE_SQ = 9.0;
+
     /**
      * Execution seams handed to emitted actions: real grid crafting,
-     * real block placement, and the world check that verifies both.
+     * real block placement, world checks that verify both, and live
+     * distances for navigation verification.
      */
     public record Environment(CraftAction.Crafter crafter,
                               PlaceBlockAction.Placer placer,
-                              TableLocator tableLocator) {
+                              TableLocator tableLocator,
+                              DistanceSensor distanceSensor) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -144,16 +154,8 @@ public final class Planner {
             for (Map.Entry<String, Integer> demand : demands.entrySet()) {
                 expand(demand.getKey(), demand.getValue() * crafts);
             }
-            if (recipe.requiresTable() && !environment.tableLocator().isNearby()) {
-                // The world has no table yet: get one into inventory and
-                // place it exactly once per plan, no matter how many
-                // table-gated crafts follow.
-                expand(CRAFTING_TABLE_ITEM, 1);
-                if (!tableHandled) {
-                    plan.add(new PlaceBlockAction(CRAFTING_TABLE_ITEM,
-                            environment.placer(), environment.tableLocator()));
-                    tableHandled = true;
-                }
+            if (recipe.requiresTable()) {
+                planTableAccess();
             }
             visiting.remove(itemId);
             BooleanSupplier tableGate = recipe.requiresTable()
@@ -162,6 +164,38 @@ public final class Planner {
             plan.add(new CraftAction(recipe, crafts, () -> liveCounts.applyAsInt(itemId),
                     environment.crafter(), tableGate));
             produced.merge(itemId, crafts * recipe.resultCount(), Integer::sum);
+        }
+
+        /**
+         * Guarantees the plan reaches a crafting table before any gated
+         * craft: walk to an existing one when possible, otherwise acquire
+         * a table item and place it — at most one placement per plan.
+         */
+        private void planTableAccess() {
+            if (environment.tableLocator().isNearby()) {
+                tableHandled = true; // already in range, nothing to emit
+                return;
+            }
+            environment.tableLocator().nearestWithin(TABLE_SEARCH_RADIUS).ifPresentOrElse(
+                    site -> {
+                        // Walk to it. Emitted per gated branch that needs
+                        // it; arrival checks make repeats free.
+                        TableLocator.TableSite target = site;
+                        plan.add(new MoveAction(target.x(), target.y(), target.z(),
+                                TABLE_ARRIVE_DISTANCE_SQ,
+                                () -> environment.distanceSensor()
+                                        .distanceSquaredTo(target.x(), target.y(), target.z()),
+                                baritoneIntegration));
+                    },
+                    () -> {
+                        // No table anywhere near: build one exactly once.
+                        expand(CRAFTING_TABLE_ITEM, 1);
+                        if (!tableHandled) {
+                            plan.add(new PlaceBlockAction(CRAFTING_TABLE_ITEM,
+                                    environment.placer(), environment.tableLocator()));
+                            tableHandled = true;
+                        }
+                    });
         }
 
         /**

@@ -21,6 +21,13 @@ public interface BaritoneIntegration {
      */
     boolean startMine(String blockName, int quantity);
 
+    /**
+     * Starts pathing to the given block position. Returns false when no
+     * backend is available or the request fails; arrival is verified by
+     * the calling action against live world state.
+     */
+    boolean startGoTo(int x, int y, int z);
+
     /** Stops any in-flight navigation owned by the agent. Safe to call repeatedly. */
     void stop();
 
@@ -36,6 +43,11 @@ public interface BaritoneIntegration {
 
             @Override
             public boolean startMine(String blockName, int quantity) {
+                return false;
+            }
+
+            @Override
+            public boolean startGoTo(int x, int y, int z) {
                 return false;
             }
 
@@ -68,10 +80,13 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
     private static final long CLIENT_THREAD_TIMEOUT_SECONDS = 5;
 
     private final Object mineProcess;
+    private final Object goalProcess;
     private final String initFailure;
 
-    private ReflectiveBaritoneIntegration(Object mineProcess, String initFailure) {
+    private ReflectiveBaritoneIntegration(Object mineProcess, Object goalProcess,
+                                          String initFailure) {
         this.mineProcess = mineProcess;
+        this.goalProcess = goalProcess;
         this.initFailure = initFailure;
     }
 
@@ -80,21 +95,36 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             Class<?> api = Class.forName("baritone.api.BaritoneAPI");
             Object provider = api.getMethod("getProvider").invoke(null);
             Object baritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
-            Object process = baritone.getClass().getMethod("getMineProcess").invoke(baritone);
-            return new ReflectiveBaritoneIntegration(process, null);
+            Object mine = null;
+            Object goal = null;
+            try {
+                mine = baritone.getClass().getMethod("getMineProcess").invoke(baritone);
+            } catch (Throwable ignored) {
+                // mining unsupported by this backend build; goto may still work
+            }
+            try {
+                goal = baritone.getClass().getMethod("getCustomGoalProcess").invoke(baritone);
+            } catch (Throwable ignored) {
+                // goto unsupported; mining may still work
+            }
+            if (mine == null && goal == null) {
+                return new ReflectiveBaritoneIntegration(null, null,
+                        "no usable Baritone processes found");
+            }
+            return new ReflectiveBaritoneIntegration(mine, goal, null);
         } catch (Throwable throwable) {
             Throwable root = throwable;
             while (root.getCause() != null) {
                 root = root.getCause();
             }
-            return new ReflectiveBaritoneIntegration(null,
+            return new ReflectiveBaritoneIntegration(null, null,
                     "Baritone not detected (" + root.getClass().getSimpleName() + ")");
         }
     }
 
     @Override
     public boolean available() {
-        return mineProcess != null;
+        return mineProcess != null || goalProcess != null;
     }
 
     @Override
@@ -126,24 +156,76 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
     }
 
     @Override
-    public void stop() {
-        if (mineProcess == null) {
-            return;
+    public boolean startGoTo(int x, int y, int z) {
+        if (goalProcess == null) {
+            return false;
         }
         try {
-            Method cancel = findMethod(mineProcess.getClass(), "cancel", new Class<?>[0]);
-            if (cancel != null) {
-                cancel.setAccessible(true);
-                runOnClientThread(() -> cancel.invoke(mineProcess));
+            Class<?> goalType = Class.forName("baritone.api.goal.Goal");
+            Class<?> goalBlock = Class.forName("baritone.api.goal.GoalBlock");
+            Object goal = goalBlock.getConstructor(int.class, int.class, int.class)
+                    .newInstance(x, y, z);
+            Method setGoalAndPath = findMethod(goalProcess.getClass(), "setGoalAndPath",
+                    new Class<?>[]{goalType});
+            if (setGoalAndPath == null) {
+                setGoalAndPath = findMethod(goalProcess.getClass(), "path", new Class<?>[0]);
+                if (setGoalAndPath != null) {
+                    Method setGoal = findMethod(goalProcess.getClass(), "setGoal",
+                            new Class<?>[]{goalType});
+                    if (setGoal == null) {
+                        return false;
+                    }
+                    setGoal.setAccessible(true);
+                    runOnClientThread(() -> setGoal.invoke(goalProcess, goal));
+                    Method path = setGoalAndPath;
+                    path.setAccessible(true);
+                    runOnClientThread(() -> path.invoke(goalProcess));
+                    return true;
+                }
+                return false;
             }
-        } catch (Throwable ignored) {
-            // Best-effort stop; verification still guards goal completion.
+            Method setGoalAndPathCall = setGoalAndPath;
+            setGoalAndPathCall.setAccessible(true);
+            runOnClientThread(() -> setGoalAndPathCall.invoke(goalProcess, goal));
+            return true;
+        } catch (Throwable throwable) {
+            Throwable root = rootOf(throwable);
+            McAgent.LOGGER.warn("Baritone goto request failed: {}", String.valueOf(root));
+            return false;
+        }
+    }
+
+    @Override
+    public void stop() {
+        for (Object process : new Object[]{mineProcess, goalProcess}) {
+            if (process == null) {
+                continue;
+            }
+            try {
+                Method cancel = findMethod(process.getClass(), "cancel", new Class<?>[0]);
+                if (cancel != null) {
+                    cancel.setAccessible(true);
+                    runOnClientThread(() -> cancel.invoke(process));
+                }
+            } catch (Throwable ignored) {
+                // Best-effort stop; verification still guards goal completion.
+            }
         }
     }
 
     @Override
     public String describe() {
-        return mineProcess != null ? "Baritone" : String.valueOf(initFailure);
+        if (mineProcess == null && goalProcess == null) {
+            return String.valueOf(initFailure);
+        }
+        StringBuilder description = new StringBuilder("Baritone");
+        if (goalProcess == null) {
+            description.append(" (no goto)");
+        }
+        if (mineProcess == null) {
+            description.append(" (no mining)");
+        }
+        return description.toString();
     }
 
     /**

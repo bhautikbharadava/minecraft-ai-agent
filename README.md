@@ -40,6 +40,11 @@ Implemented:
   ingredients are reachable. Placement is skipped when a table is
   already within range, one placement is shared per plan, and gated
   crafts fail honestly if the table disappears mid-run.
+- **Table reuse:** a placed table is remembered by world query, not
+  inventory — if one exists within walking distance (~48 blocks) the
+  planner emits `MoveAction` (Baritone goto) to reach it instead of
+  crafting another; only when none exists nearby does the agent build
+  one. Arrival is verified against live distance (PRD 13).
 - **Tool ladders:** when a mineable item needs a pickaxe tier the agent
   doesn't have, the planner folds the cheapest qualifying tool's whole
   chain into the plan instead of refusing — `/agent get stone_pickaxe 1`

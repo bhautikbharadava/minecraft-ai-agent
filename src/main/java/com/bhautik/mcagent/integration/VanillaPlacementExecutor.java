@@ -16,6 +16,7 @@ import net.minecraft.world.phys.AABB;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Minecraft adapter behind the placement seam: picks a legal spot next
@@ -36,7 +37,20 @@ public final class VanillaPlacementExecutor {
     }
 
     public static TableLocator tableLocator(ServerPlayer player, int radius) {
-        return () -> findTable(player, radius) != null;
+        return new TableLocator() {
+            @Override
+            public boolean isNearby() {
+                return findTable(player, radius) != null;
+            }
+
+            @Override
+            public Optional<TableLocator.TableSite> nearestWithin(int searchRadius) {
+                BlockPos found = findTable(player, searchRadius);
+                return found == null ? Optional.empty()
+                        : Optional.of(new TableLocator.TableSite(
+                                found.getX(), found.getY(), found.getZ()));
+            }
+        };
     }
 
     public static PlaceBlockAction.Placer placer(ServerPlayer player) {
