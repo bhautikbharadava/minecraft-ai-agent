@@ -234,7 +234,11 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
         try {
             Class<?> minecraftClass = Class.forName("net.minecraft.client.Minecraft");
             Object client = minecraftClass.getMethod("getInstance").invoke(null);
-            Object player = minecraftClass.getMethod("player").invoke(client);
+            Field playerField = findField(minecraftClass, "player");
+            if (playerField == null) {
+                return false;
+            }
+            Object player = playerField.get(client);
             if (player == null) {
                 return false;
             }
@@ -242,33 +246,43 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             Method getItem = findMethod(inventory.getClass(), "getItem",
                     new Class<?>[]{int.class});
             Method setItem = findMethod(inventory.getClass(), "setItem",
-                    new Class<?>[]{int.class, Class.forName("net.minecraft.world.item.ItemStack")});
-            Field selectedField = findIntField(inventory.getClass(), "selected");
-            if (getItem == null || setItem == null || selectedField == null) {
+                    new Class<?>[]{int.class,
+                            Class.forName("net.minecraft.world.item.ItemStack")});
+            Method getSelected = findMethod(inventory.getClass(), "getSelectedSlot",
+                    new Class<?>[0]);
+            Method setSelected = findMethod(inventory.getClass(), "setSelectedSlot",
+                    new Class<?>[]{int.class});
+            Method sizeOf = findMethod(inventory.getClass(), "getContainerSize",
+                    new Class<?>[0]);
+            if (getItem == null || setItem == null || getSelected == null
+                    || setSelected == null || sizeOf == null) {
+                McAgent.LOGGER.warn("Baritone equip unsupported: inventory accessors missing");
                 return false;
             }
-            int hotbarSize = 9;
-            int inventorySize = (Integer) inventory.getClass()
-                    .getMethod("getContainerSize").invoke(inventory);
-            Integer heldSlot = findSlotWithItem(inventory, getItem, itemId, 0, hotbarSize);
-            if (heldSlot != null) {
-                int slot = heldSlot;
-                runOnClientThread(() -> selectedField.setInt(inventory, slot));
-                return true;
-            }
-            Integer backupSlot = findSlotWithItem(inventory, getItem, itemId,
-                    hotbarSize, inventorySize);
-            if (backupSlot == null) {
+            int inventorySize = (Integer) sizeOf.invoke(inventory);
+            Integer heldSlot = findSlotWithItem(inventory, getItem, itemId, 0, 9);
+            Integer backpackSlot = heldSlot == null
+                    ? findSlotWithItem(inventory, getItem, itemId, 9, inventorySize)
+                    : null;
+            if (heldSlot == null && backpackSlot == null) {
                 return false;
             }
-            int selectedIndex = selectedField.getInt(inventory);
-            int source = backupSlot;
+            Method selectCall = setSelected;
+            Method getItemCall = getItem;
+            Method setItemCall = setItem;
+            Method selectedCall = getSelected;
             runOnClientThread(() -> {
-                Object tool = getItem.invoke(inventory, source);
-                Object displaced = getItem.invoke(inventory, selectedIndex);
-                setItem.invoke(inventory, source, displaced);
-                setItem.invoke(inventory, selectedIndex, tool);
-                selectedField.setInt(inventory, selectedIndex);
+                if (heldSlot != null) {
+                    selectCall.invoke(inventory, heldSlot);
+                    return;
+                }
+                // Swap the backpack tool into the currently held slot.
+                int current = (Integer) selectedCall.invoke(inventory);
+                Object tool = getItemCall.invoke(inventory, backpackSlot);
+                Object displaced = getItemCall.invoke(inventory, current);
+                setItemCall.invoke(inventory, backpackSlot, displaced);
+                setItemCall.invoke(inventory, current, tool);
+                selectCall.invoke(inventory, current);
             });
             return true;
         } catch (Throwable throwable) {
@@ -313,7 +327,7 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
         }
     }
 
-    private static Field findIntField(Class<?> type, String name) {
+    private static Field findField(Class<?> type, String name) {
         while (type != null) {
             try {
                 Field field = type.getDeclaredField(name);
