@@ -274,6 +274,9 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             if (heldSlot == null && backpackSlot == null) {
                 return false;
             }
+            Integer freeHotbarSlot = heldSlot == null
+                    ? findEmptySlot(inventory, getItem, 0, 9)
+                    : null;
             Method selectCall = setSelected;
             Method getItemCall = getItem;
             Method setItemCall = setItem;
@@ -283,13 +286,16 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
                     selectCall.invoke(inventory, heldSlot);
                     return;
                 }
-                // Swap the backpack tool into the currently held slot.
-                int current = (Integer) selectedCall.invoke(inventory);
+                // Prefer an empty hotbar slot so nothing the player holds
+                // gets displaced; fall back to the current selection.
+                int destination = freeHotbarSlot != null
+                        ? freeHotbarSlot
+                        : (Integer) selectedCall.invoke(inventory);
                 Object tool = getItemCall.invoke(inventory, backpackSlot);
-                Object displaced = getItemCall.invoke(inventory, current);
+                Object displaced = getItemCall.invoke(inventory, destination);
                 setItemCall.invoke(inventory, backpackSlot, displaced);
-                setItemCall.invoke(inventory, current, tool);
-                selectCall.invoke(inventory, current);
+                setItemCall.invoke(inventory, destination, tool);
+                selectCall.invoke(inventory, destination);
             });
             return true;
         } catch (Throwable throwable) {
@@ -305,6 +311,16 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
         for (int slot = from; slot < to; slot++) {
             ItemStackView view = new ItemStackView(getItem.invoke(inventory, slot));
             if (view.matches(itemId)) {
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    private static Integer findEmptySlot(Object inventory, Method getItem,
+                                         int from, int to) throws Exception {
+        for (int slot = from; slot < to; slot++) {
+            if (new ItemStackView(getItem.invoke(inventory, slot)).isEmpty()) {
                 return slot;
             }
         }
@@ -328,6 +344,17 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
                 String candidateId = net.minecraft.core.registries.BuiltInRegistries.ITEM
                         .getKey((net.minecraft.world.item.Item) item).toString();
                 return candidateId.equals(itemId);
+            } catch (Throwable broken) {
+                return false;
+            }
+        }
+
+        boolean isEmpty() {
+            if (stack == null) {
+                return true;
+            }
+            try {
+                return (Boolean) stack.getClass().getMethod("isEmpty").invoke(stack);
             } catch (Throwable broken) {
                 return false;
             }

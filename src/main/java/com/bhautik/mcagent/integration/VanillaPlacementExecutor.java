@@ -60,6 +60,15 @@ public final class VanillaPlacementExecutor {
                         : Optional.of(new BlockLocator.BlockSite(
                                 found.getX(), found.getY(), found.getZ()));
             }
+
+            @Override
+            public Optional<BlockLocator.BlockSite> approachFor(BlockLocator.BlockSite site) {
+                BlockPos spot = findApproachSpot(player,
+                        new BlockPos(site.x(), site.y(), site.z()));
+                return spot == null ? Optional.empty()
+                        : Optional.of(new BlockLocator.BlockSite(
+                                spot.getX(), spot.getY(), spot.getZ()));
+            }
         };
     }
 
@@ -184,6 +193,42 @@ public final class VanillaPlacementExecutor {
             }
         }
         return null;
+    }
+
+    /**
+     * Nearest standable air position adjacent to the target block, so
+     * navigation stops beside it instead of mining through it.
+     */
+    private static BlockPos findApproachSpot(ServerPlayer player, BlockPos blockPos) {
+        Level level = player.level();
+        List<BlockPos> candidates = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = 0; dy <= 1; dy++) {
+                    if (dx == 0 && dz == 0) {
+                        continue; // the block itself
+                    }
+                    BlockPos spot = blockPos.offset(dx, dy, dz);
+                    BlockState state = level.getBlockState(spot);
+                    if (!state.isAir() && !state.canBeReplaced()) {
+                        continue;
+                    }
+                    BlockPos below = spot.below();
+                    if (!level.getBlockState(below).isFaceSturdy(level, below, Direction.UP)) {
+                        continue;
+                    }
+                    AABB box = new AABB(spot.getX(), spot.getY(), spot.getZ(),
+                            spot.getX() + 1, spot.getY() + 1, spot.getZ() + 1);
+                    if (!level.noCollision(box)) {
+                        continue;
+                    }
+                    candidates.add(spot.immutable());
+                }
+            }
+        }
+        return candidates.stream()
+                .min(Comparator.comparingDouble(pos -> pos.distSqr(player.blockPosition())))
+                .orElse(null);
     }
 
     private static ItemStack findStack(ServerPlayer player, String itemId) {

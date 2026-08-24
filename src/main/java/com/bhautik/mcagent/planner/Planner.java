@@ -253,12 +253,19 @@ public final class Planner {
                 return;
             }
             locator.nearestWithin(BLOCK_SEARCH_RADIUS).ifPresentOrElse(
-                    site -> plan.add(new MoveAction(blockItemId,
-                            site.x(), site.y(), site.z(),
-                            BLOCK_ARRIVE_DISTANCE_SQ,
-                            () -> environment.distanceSensor()
-                                    .distanceSquaredTo(site.x(), site.y(), site.z()),
-                            baritoneIntegration)),
+                    site -> {
+                        // Walk to a spot BESIDE the block: targeting the
+                        // block itself makes navigation mine it on arrival.
+                        BlockLocator.BlockSite approach =
+                                locator.approachFor(site).orElse(site);
+                        plan.add(new MoveAction(blockItemId,
+                                approach.x(), approach.y(), approach.z(),
+                                BLOCK_ARRIVE_DISTANCE_SQ,
+                                () -> environment.distanceSensor()
+                                        .distanceSquaredTo(approach.x(), approach.y(),
+                                                approach.z()),
+                                baritoneIntegration));
+                    },
                     () -> {
                         expand(blockItemId, 1);
                         if (placedBlocks.add(blockItemId)) {
