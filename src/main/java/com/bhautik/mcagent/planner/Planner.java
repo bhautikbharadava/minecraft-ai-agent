@@ -182,10 +182,13 @@ public final class Planner {
                     * recipe.resultCount(), Integer::sum);
         }
 
-        /** Furnace route: secure a furnace, then input and fuel, then cook. */
+        /** Furnace route: secure a furnace, then input and fuel, then cook.
+         * Among the recipe's accepted inputs we plan the first one the
+         * agent can actually resolve — e.g. raw iron over deepslate ore,
+         * which vanilla also accepts but the agent cannot gather. */
         private void expandSmelting(String itemId, int missing,
                                     SmeltingResolver.SmeltableRecipe smeltable) {
-            String input = smeltable.representativeInput();
+            String input = pickResolvableInput(smeltable);
             planBlockAccess(FURNACE_ITEM, environment.furnaceLocator());
             expand(input, missing);
             expand(FUEL_ITEM, ceilDiv(missing, SmeltAction.ITEMS_PER_FUEL));
@@ -193,6 +196,17 @@ public final class Planner {
             plan.add(new SmeltAction(input, FUEL_ITEM, missing,
                     () -> liveCounts.applyAsInt(itemId),
                     environment.smelter(), furnaceGate));
+        }
+
+        private String pickResolvableInput(SmeltingResolver.SmeltableRecipe smeltable) {
+            for (String candidate : smeltable.candidateInputItemIds()) {
+                if (DirectAcquisitions.sourceBlockFor(candidate).isPresent()
+                        || resolver.findRecipe(candidate).isPresent()
+                        || environment.smeltingResolver().findSmelting(candidate).isPresent()) {
+                    return candidate;
+                }
+            }
+            return smeltable.representativeInput();
         }
 
         /** Grid route: aggregate ingredient slots, secure a table, craft. */

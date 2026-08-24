@@ -343,7 +343,8 @@ public final class AgentCli {
                 new HashMap<>();
         smelting.put("minecraft:iron_ingot",
                 new com.bhautik.mcagent.crafting.SmeltingResolver.SmeltableRecipe(
-                        "minecraft:iron_ingot", List.of("minecraft:raw_iron")));
+                        "minecraft:iron_ingot", List.of(
+                        "minecraft:deepslate_iron_ore", "minecraft:raw_iron")));
         Set<String> miner = Set.of("minecraft:stone_pickaxe");
         // The agent carries a furnace so the plan places it without
         // needing the whole furnace-crafting chain in the fake recipes.
