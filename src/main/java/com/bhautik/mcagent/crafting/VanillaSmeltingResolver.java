@@ -66,10 +66,15 @@ public final class VanillaSmeltingResolver implements SmeltingResolver {
                 continue;
             }
             SmeltableRecipe candidate = new SmeltableRecipe(outputId, candidates);
-            // Deterministic pick: smallest representative input wins.
-            built.merge(outputId, candidate, (existing, proposed) ->
-                    proposed.representativeInput()
-                            .compareTo(existing.representativeInput()) < 0 ? proposed : existing);
+            // Union accepted inputs across duplicate-output recipes
+            // (vanilla registers raw ore, ore, and deepslate ore variants
+            // separately); the planner picks whichever it can gather.
+            built.merge(outputId, candidate, (existing, proposed) -> {
+                java.util.LinkedHashSet<String> union =
+                        new java.util.LinkedHashSet<>(existing.candidateInputItemIds());
+                union.addAll(proposed.candidateInputItemIds());
+                return new SmeltableRecipe(outputId, List.copyOf(union));
+            });
         }
         return built;
     }
