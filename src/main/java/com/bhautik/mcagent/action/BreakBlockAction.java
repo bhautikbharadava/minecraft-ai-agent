@@ -66,6 +66,11 @@ public final class BreakBlockAction implements AgentAction {
     }
 
     @Override
+    public boolean bestEffort() {
+        return true;
+    }
+
+    @Override
     public void start() {
         if (status != ActionStatus.PENDING) {
             return;

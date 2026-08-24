@@ -1,6 +1,7 @@
 package com.bhautik.mcagent.goal;
 
 import com.bhautik.mcagent.McAgent;
+import com.bhautik.mcagent.action.ActionStatus;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.crafting.VanillaCraftingExecutor;
 import com.bhautik.mcagent.crafting.VanillaRecipeResolver;
@@ -148,6 +149,14 @@ public final class GoalService {
         }
         refreshSnapshot(player);
         int current = activeRun.snapshot.count(activeRun.item);
+        // Reality first (PRD 14): if the goal is already satisfied, no
+        // failure below matters.
+        if (finished.status() != ActionStatus.CANCELLED && current >= activeRun.requested) {
+            activeRun.goal.markSuccess();
+            McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
+            run = null;
+            return;
+        }
         switch (finished.status()) {
             case CANCELLED -> {
                 run = null;
@@ -155,31 +164,37 @@ public final class GoalService {
             case FAILED -> {
                 McAgent.LOGGER.warn("[Recovery] Action failed: {} ({})",
                         finished.title(), finished.failureReason());
-                if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
+                if (finished.bestEffort()) {
+                    // Cleanup steps never cost an attempt or sink the goal.
+                    McAgent.LOGGER.info("[Recovery] Best-effort step failed; continuing: {}",
+                            finished.title());
+                    advanceOrFinish(activeRun, current);
+                } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
                     McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
                 } else {
                     finishWithFailure(activeRun);
                 }
             }
-            default -> {
-                // Step finished; advance the plan or verify against reality.
-                if (current >= activeRun.requested) {
-                    activeRun.goal.markSuccess();
-                    McAgent.LOGGER.info("[Agent] Goal completed: {}",
-                            activeRun.goal.title());
-                    run = null;
-                } else if (!activeRun.queue.isEmpty() && launchNextAction()) {
-                    McAgent.LOGGER.info("[Planner] Advancing plan: {}", executor.currentTitle());
-                } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
-                    McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
-                } else {
-                    activeRun.goal.markFailed(
-                            "verified inventory has " + current + "/" + activeRun.requested
-                                    + " after all attempts");
-                    run = null;
-                }
-            }
+            default -> advanceOrFinish(activeRun, current);
         }
+    }
+
+    /** Moves to the next queued step, replans, or closes the run out. */
+    private void advanceOrFinish(ActiveRun activeRun, int current) {
+        if (!runQueueIsEmpty(activeRun) && launchNextAction()) {
+            McAgent.LOGGER.info("[Planner] Advancing plan: {}", executor.currentTitle());
+        } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
+            McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
+        } else {
+            activeRun.goal.markFailed(
+                    "verified inventory has " + current + "/" + activeRun.requested
+                            + " after all attempts");
+            run = null;
+        }
+    }
+
+    private boolean runQueueIsEmpty(ActiveRun activeRun) {
+        return activeRun.queue.isEmpty();
     }
 
     /** Plans from scratch and fills the run's action queue. */

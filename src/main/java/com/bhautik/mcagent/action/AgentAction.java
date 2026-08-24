@@ -20,4 +20,13 @@ public interface AgentAction {
 
     /** Human-readable reason when status() is FAILED, otherwise null. */
     String failureReason();
+
+    /**
+     * Cleanup steps (e.g. collecting a placed utility block) are
+     * best-effort: their failure must never cost a replan attempt or
+     * fail an otherwise satisfied goal.
+     */
+    default boolean bestEffort() {
+        return false;
+    }
 }
