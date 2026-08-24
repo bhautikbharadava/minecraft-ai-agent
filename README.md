@@ -25,9 +25,16 @@ Implemented:
   blocks (ores + deepslate, wood family, plants); tool-tier gating fails
   fast (e.g. diamonds without an iron pickaxe) instead of mining blocks
   that would drop nothing.
+- **Dependency planning (M5):** goals expand recursively through real
+  vanilla recipes — `/agent get crafting_table 1` mines logs, crafts
+  planks, then crafts the table. Shared dependencies are aggregated,
+  existing inventory is credited first, and inventory-grid (2x2)
+  recipes execute via a server-side `CraftAction` with output
+  verification.
 
-Not implemented yet: crafting, smelting, survival interruptions,
-exploration goals, LLM integration, or farms.
+Not implemented yet: crafting-table (3x3) usage and tools needing it,
+smelting, survival interruptions, exploration goals, LLM integration,
+or farms.
 
 ### Execution backend
 

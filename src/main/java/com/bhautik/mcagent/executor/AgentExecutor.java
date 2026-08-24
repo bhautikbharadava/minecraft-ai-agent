@@ -68,6 +68,11 @@ public final class AgentExecutor {
         return busy() ? AgentState.EXECUTING : AgentState.IDLE;
     }
 
+    /** Title of the action currently running, or null when idle. */
+    public String currentTitle() {
+        return current == null ? null : current.title();
+    }
+
     public Planner planner() {
         return planner;
     }
