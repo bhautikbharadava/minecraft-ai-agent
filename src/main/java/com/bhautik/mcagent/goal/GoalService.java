@@ -211,13 +211,18 @@ public final class GoalService {
         activeRun.snapshot.setCount(activeRun.item, current);
         try {
             var countsNow = InventoryState.collect(player).itemCounts();
+            var environment = new com.bhautik.mcagent.planner.Planner.Environment(
+                    VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.tableLocator(player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS));
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
                     id -> countsNow.getOrDefault(id, 0),
                     countsNow.keySet(),
                     itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
-                    VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                    environment,
                     activeRun.item.id(),
                     activeRun.requested);
             if (actions.isEmpty()) {

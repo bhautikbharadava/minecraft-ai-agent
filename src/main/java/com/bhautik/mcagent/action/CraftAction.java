@@ -3,12 +3,17 @@ package com.bhautik.mcagent.action;
 import com.bhautik.mcagent.McAgent;
 import com.bhautik.mcagent.crafting.RecipeResolver.CraftableRecipe;
 
+import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 
 /**
  * Crafts a batch of items in the agent's inventory grid. Each tick it
  * performs at most one craft and verifies progress against the live
  * inventory count of the output item.
+ *
+ * Table-gated recipes additionally require an environment check (a
+ * crafting table within range); losing it fails the action honestly
+ * instead of crafting through a table that no longer exists.
  */
 public final class CraftAction implements AgentAction {
     /** Ticks without output progress after all crafts were issued before failing. */
@@ -23,6 +28,7 @@ public final class CraftAction implements AgentAction {
     private final int craftsNeeded;
     private final IntSupplier liveOutputCount;
     private final Crafter crafter;
+    private final BooleanSupplier environmentReady;
 
     private final String title;
     private ActionStatus status = ActionStatus.PENDING;
@@ -34,10 +40,16 @@ public final class CraftAction implements AgentAction {
 
     public CraftAction(CraftableRecipe recipe, int craftsNeeded, IntSupplier liveOutputCount,
                        Crafter crafter) {
+        this(recipe, craftsNeeded, liveOutputCount, crafter, null);
+    }
+
+    public CraftAction(CraftableRecipe recipe, int craftsNeeded, IntSupplier liveOutputCount,
+                       Crafter crafter, BooleanSupplier environmentReady) {
         this.recipe = recipe;
         this.craftsNeeded = craftsNeeded;
         this.liveOutputCount = liveOutputCount;
         this.crafter = crafter;
+        this.environmentReady = environmentReady;
         this.title = "Craft " + (craftsNeeded * recipe.resultCount()) + " "
                 + recipe.resultItemId().replaceFirst("^minecraft:", "");
     }
@@ -62,6 +74,10 @@ public final class CraftAction implements AgentAction {
         if (status != ActionStatus.PENDING) {
             return;
         }
+        if (environmentReady != null && !environmentReady.getAsBoolean()) {
+            fail("crafting table is not within range");
+            return;
+        }
         status = ActionStatus.RUNNING;
         stepTarget = Math.max(liveOutputCount.getAsInt(), 0) + craftsNeeded * recipe.resultCount();
         McAgent.LOGGER.info("[Action] Started: {}", title);
@@ -79,6 +95,10 @@ public final class CraftAction implements AgentAction {
             return;
         }
         if (issued < craftsNeeded) {
+            if (environmentReady != null && !environmentReady.getAsBoolean()) {
+                fail("crafting table is no longer within range");
+                return;
+            }
             int completed = crafter.craft(recipe, 1);
             issued += completed;
             if (completed <= 0) {

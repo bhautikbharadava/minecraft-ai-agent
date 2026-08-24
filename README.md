@@ -31,10 +31,18 @@ Implemented:
   existing inventory is credited first, and inventory-grid (2x2)
   recipes execute via a server-side `CraftAction` with output
   verification.
+- **Crafting table (M6):** recipes wider or taller than 2x2 plan
+  acquire-table → place → craft: the agent carries or crafts a
+  `crafting_table`, places it on a verified spot next to itself
+  (`PlaceBlockAction`, block-state verified), and crafts 3x3 recipes
+  against it — `/agent get chest 1` works end-to-end from bare hands,
+  as do `furnace`, `stone_pickaxe`, and other table-gated goods whose
+  ingredients are reachable. Placement is skipped when a table is
+  already within range, one placement is shared per plan, and gated
+  crafts fail honestly if the table disappears mid-run.
 
-Not implemented yet: crafting-table (3x3) usage and tools needing it,
-smelting, survival interruptions, exploration goals, LLM integration,
-or farms.
+Not implemented yet: smelting (so `iron_ingot` chains still refuse),
+survival interruptions, exploration goals, LLM integration, or farms.
 
 ### Execution backend
 
@@ -66,8 +74,8 @@ tool tier available? ──no──► FAILED "requires iron pickaxe or better"
 Baritone mines → live progress → verified count → SUCCESS / FAILED
 ```
 
-Smelted/crafted goods (e.g. `iron_ingot`) resolve but fail honestly
-until the smelting milestone lands.
+Smelted goods (e.g. `iron_ingot`) resolve but fail honestly until the
+smelting milestone lands.
 
 ## Versions
 
@@ -108,14 +116,19 @@ Once in a world, run:
 com.bhautik.mcagent
 ├── McAgent
 ├── command/AgentCommand
-├── action/AgentAction, ActionStatus, MineAction
+├── action/AgentAction, ActionStatus, MineAction, CraftAction,
+│         PlaceBlockAction
 ├── state/WorldState
 ├── state/WorldStateCollector
 ├── state/InventoryState
+├── world/TableLocator           (is-a-table-in-range seam)
 ├── goal/GoalService        (agent brain: plan → execute → verify → recover)
 ├── goal/Goal               (planner-facing seam, pre-execution)
-├── planner/Planner
+├── planner/Planner              (+ Environment: crafter/placer/locator seams)
 ├── executor/AgentExecutor  (single-action tick runner)
+├── crafting/RecipeResolver, VanillaRecipeResolver,
+│            VanillaCraftingExecutor
+├── integration/VanillaPlacementExecutor (placement + table detection)
 ├── item/MineableItems      (directly-mineable item → source block map)
 └── integration/BaritoneIntegration (reflective, swap-safe backend)
 

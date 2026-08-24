@@ -4,6 +4,7 @@ import com.bhautik.mcagent.action.ActionStatus;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.CraftAction;
 import com.bhautik.mcagent.action.MineAction;
+import com.bhautik.mcagent.action.PlaceBlockAction;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
 import dev.minecraftai.agent.command.AgentCommandHandler;
@@ -138,9 +139,10 @@ public final class AgentCli {
     }
 
     /**
-     * Deterministic checks for M5 dependency planning: post-order
-     * chaining, recipe multipliers, unsupported leaves, and cycle guards
-     * — all against fake resolvers, no Minecraft required.
+     * Deterministic checks for M5/M6 dependency planning: post-order
+     * chaining, recipe multipliers, unsupported leaves, cycle guards,
+     * and crafting-table insertion/dedup — all against fake resolvers,
+     * no Minecraft required.
      */
     private static void validateDependencyPlanning() {
         com.bhautik.mcagent.planner.Planner planner = new com.bhautik.mcagent.planner.Planner(
@@ -153,19 +155,26 @@ public final class AgentCli {
         recipes.put("minecraft:crafting_table", recipe("minecraft:crafting_table", 1,
                 cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
                 cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
+        recipes.put("minecraft:chest", tableRecipe("minecraft:chest", 1,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
         com.bhautik.mcagent.crafting.RecipeResolver resolver = new com.bhautik.mcagent.crafting.RecipeResolver() {
             @Override public Grid grid() { return Grid.INVENTORY_2X2; }
             @Override public Optional<CraftableRecipe> findRecipe(String id) {
                 return Optional.ofNullable(recipes.get(id));
             }
         };
-        Map<String, Integer> owned = new HashMap<>();
-        owned.put("minecraft:oak_log", 1);
         CraftAction.Crafter crafter = (recipe, times) -> times;
+        PlaceBlockAction.Placer placer = itemId -> PlaceBlockAction.Placer.Result.ok();
 
         // crafting_table: have 1 log -> mine nothing, craft planks x1, table x1
+        Map<String, Integer> owned = new HashMap<>();
+        owned.put("minecraft:oak_log", 1);
         List<AgentAction> plan = planner.planAcquisition(resolver,
-                id -> owned.getOrDefault(id, 0), Set.of(), id -> 0, crafter,
+                id -> owned.getOrDefault(id, 0), Set.of(), id -> 0,
+                env(crafter, placer, false),
                 "minecraft:crafting_table", 1);
         assertEquals(plan.size(), 2, "table chain length");
         if (!(plan.get(0) instanceof CraftAction)) {
@@ -177,31 +186,96 @@ public final class AgentCli {
 
         // sticks x8: need 8 planks -> own 0 logs -> mine 1 log, craft 4 planks, craft 2x sticks
         List<AgentAction> stickPlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, crafter, "minecraft:stick", 8);
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, false),
+                "minecraft:stick", 8);
         assertEquals(stickPlan.size(), 3, "stick chain length");
         assertContains(stickPlan.get(0).title(), "Mine");
         assertContains(stickPlan.get(1).title(), "oak_planks");
 
         try {
-            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0, crafter,
-                    "minecraft:iron_ingot", 1);
+            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
+                    env(crafter, placer, false), "minecraft:iron_ingot", 1);
             throw new IllegalStateException("smelted goods must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
             assertContains(expected.getMessage(), "no supported acquisition strategy");
         }
 
-        // Table-gated outputs refuse with a precise reason.
+        // A table-gated goal whose ingredients are unresolvable still
+        // refuses honestly (iron_ingot needs smelting, a later milestone).
         recipes.put("minecraft:iron_pickaxe", tableRecipe("minecraft:iron_pickaxe", 1,
                 cell("minecraft:iron_ingot"), cell("minecraft:iron_ingot"),
                 cell("minecraft:iron_ingot"), cell("minecraft:stick"),
                 cell("minecraft:stick")));
         try {
-            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0, crafter,
-                    "minecraft:iron_pickaxe", 1);
-            throw new IllegalStateException("3x3 recipes must fail planning without a table");
+            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
+                    env(crafter, placer, false), "minecraft:iron_pickaxe", 1);
+            throw new IllegalStateException("unresolvable table-gated goods must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
-            assertContains(expected.getMessage(), "crafting table");
+            assertContains(expected.getMessage(), "no supported acquisition strategy");
         }
+
+        // M6: a craftable table-gated item plans acquire-table -> place ->
+        // craft when the world has no table yet.
+        List<AgentAction> chestPlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, false),
+                "minecraft:chest", 1);
+        assertEquals(chestPlan.size(), 5, "chest chain length");
+        assertContains(chestPlan.get(0).title(), "Mine");
+        assertContains(chestPlan.get(1).title(), "oak_planks");
+        assertContains(chestPlan.get(2).title(), "Craft");
+        assertEquals(chestPlan.get(3).getClass(), PlaceBlockAction.class, "table placement step");
+        assertEquals(((PlaceBlockAction) chestPlan.get(3)).status(), ActionStatus.PENDING,
+                "placement starts PENDING");
+        assertContains(chestPlan.get(4).title(), "chest");
+
+        // With a table already in range, no table acquisition or placement.
+        List<AgentAction> nearTablePlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, true),
+                "minecraft:chest", 1);
+        assertEquals(nearTablePlan.size(), 3, "near-table chain length");
+        if (nearTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)) {
+            throw new IllegalStateException("existing table must not trigger placement");
+        }
+
+        // Carrying a table skips crafting one but still places it.
+        Map<String, Integer> carryingTable = new HashMap<>();
+        carryingTable.put("minecraft:crafting_table", 1);
+        List<AgentAction> carriedPlan = planner.planAcquisition(resolver,
+                id -> carryingTable.getOrDefault(id, 0), Set.of(), id -> 0,
+                env(crafter, placer, false), "minecraft:chest", 1);
+        assertEquals(carriedPlan.size(), 4, "carried-table chain length");
+        assertEquals(carriedPlan.get(2).getClass(), PlaceBlockAction.class, "still places carried table");
+
+        // Multiple table-gated crafts share one placement per plan.
+        List<AgentAction> bulkPlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, false),
+                "minecraft:chest", 3);
+        long placements = bulkPlan.stream()
+                .filter(action -> action instanceof PlaceBlockAction)
+                .count();
+        assertEquals(placements, 1L, "one placement per plan");
+
+        // Gated crafting fails honestly when the environment check dies.
+        CraftAction gated = new CraftAction(recipes.get("minecraft:chest"), 1,
+                () -> 0, crafter, () -> false);
+        gated.start();
+        assertEquals(gated.status(), ActionStatus.FAILED, "missing environment fails fast");
+        assertContains(String.valueOf(gated.failureReason()), "crafting table");
+
+        boolean[] tableInWorld = {true};
+        CraftAction gatedThenLost = new CraftAction(recipes.get("minecraft:chest"), 1,
+                () -> 0, crafter, () -> tableInWorld[0]);
+        gatedThenLost.start();
+        tableInWorld[0] = false;
+        gatedThenLost.tick();
+        assertEquals(gatedThenLost.status(), ActionStatus.FAILED, "lost table fails mid-run");
+    }
+
+    /** Builds a planner environment with a switchable world-table state. */
+    private static com.bhautik.mcagent.planner.Planner.Environment env(
+            CraftAction.Crafter crafter, PlaceBlockAction.Placer placer, boolean tableNearby) {
+        return new com.bhautik.mcagent.planner.Planner.Environment(
+                crafter, placer, () -> tableNearby);
     }
 
     private static SlotSpec cell(String itemId) {
