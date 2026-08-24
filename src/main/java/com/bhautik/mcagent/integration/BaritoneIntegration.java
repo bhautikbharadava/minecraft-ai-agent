@@ -2,6 +2,7 @@ package com.bhautik.mcagent.integration;
 
 import com.bhautik.mcagent.McAgent;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,14 @@ public interface BaritoneIntegration {
      */
     boolean startGoTo(int x, int y, int z);
 
+    /**
+     * Moves the given item into the agent's hand so gated blocks are
+     * mined with the right tool tier (wrong-tier mining destroys ores
+     * without dropping anything). Best-effort; returns false when the
+     * item is absent or switching is unsupported.
+     */
+    boolean equip(String itemId);
+
     /** Stops any in-flight navigation owned by the agent. Safe to call repeatedly. */
     void stop();
 
@@ -48,6 +57,11 @@ public interface BaritoneIntegration {
 
             @Override
             public boolean startGoTo(int x, int y, int z) {
+                return false;
+            }
+
+            @Override
+            public boolean equip(String itemId) {
                 return false;
             }
 
@@ -207,6 +221,106 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
                 return Class.forName(candidate);
             } catch (ClassNotFoundException ignored) {
                 // try the next known location
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public boolean equip(String itemId) {
+        if (mineProcess == null && goalProcess == null) {
+            return false;
+        }
+        try {
+            Class<?> minecraftClass = Class.forName("net.minecraft.client.Minecraft");
+            Object client = minecraftClass.getMethod("getInstance").invoke(null);
+            Object player = minecraftClass.getMethod("player").invoke(client);
+            if (player == null) {
+                return false;
+            }
+            Object inventory = player.getClass().getMethod("getInventory").invoke(player);
+            Method getItem = findMethod(inventory.getClass(), "getItem",
+                    new Class<?>[]{int.class});
+            Method setItem = findMethod(inventory.getClass(), "setItem",
+                    new Class<?>[]{int.class, Class.forName("net.minecraft.world.item.ItemStack")});
+            Field selectedField = findIntField(inventory.getClass(), "selected");
+            if (getItem == null || setItem == null || selectedField == null) {
+                return false;
+            }
+            int hotbarSize = 9;
+            int inventorySize = (Integer) inventory.getClass()
+                    .getMethod("getContainerSize").invoke(inventory);
+            Integer heldSlot = findSlotWithItem(inventory, getItem, itemId, 0, hotbarSize);
+            if (heldSlot != null) {
+                int slot = heldSlot;
+                runOnClientThread(() -> selectedField.setInt(inventory, slot));
+                return true;
+            }
+            Integer backupSlot = findSlotWithItem(inventory, getItem, itemId,
+                    hotbarSize, inventorySize);
+            if (backupSlot == null) {
+                return false;
+            }
+            int selectedIndex = selectedField.getInt(inventory);
+            int source = backupSlot;
+            runOnClientThread(() -> {
+                Object tool = getItem.invoke(inventory, source);
+                Object displaced = getItem.invoke(inventory, selectedIndex);
+                setItem.invoke(inventory, source, displaced);
+                setItem.invoke(inventory, selectedIndex, tool);
+                selectedField.setInt(inventory, selectedIndex);
+            });
+            return true;
+        } catch (Throwable throwable) {
+            Throwable root = rootOf(throwable);
+            McAgent.LOGGER.warn("Baritone equip request failed: {}", String.valueOf(root));
+            return false;
+        }
+    }
+
+    private static Integer findSlotWithItem(Object inventory, Method getItem,
+                                            String itemId, int from, int to)
+            throws Exception {
+        for (int slot = from; slot < to; slot++) {
+            ItemStackView view = new ItemStackView(getItem.invoke(inventory, slot));
+            if (view.matches(itemId)) {
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    /** Reflection shield over ItemStack so this class needs no MC imports. */
+    private static final class ItemStackView {
+        private final Object stack;
+
+        private ItemStackView(Object stack) {
+            this.stack = stack;
+        }
+
+        boolean matches(String itemId) {
+            if (stack == null) {
+                return false;
+            }
+            try {
+                Object item = stack.getClass().getMethod("getItem").invoke(stack);
+                String candidateId = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey((net.minecraft.world.item.Item) item).toString();
+                return candidateId.equals(itemId);
+            } catch (Throwable broken) {
+                return false;
+            }
+        }
+    }
+
+    private static Field findIntField(Class<?> type, String name) {
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field;
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
             }
         }
         return null;

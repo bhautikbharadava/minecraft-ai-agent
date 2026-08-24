@@ -113,6 +113,21 @@ public final class AgentCli {
         offline.start();
         assertEquals(offline.status(), ActionStatus.FAILED, "missing backend fails fast");
         assertContains(String.valueOf(offline.failureReason()), "no navigation backend");
+
+        // Gated mining must equip the right tier before breaking blocks:
+        // wrong-tool mining destroys ores without dropping anything.
+        FakeBackend equipping = new FakeBackend();
+        MineAction gatedMine = new MineAction("minecraft:diamond_ore", 0, 3, () -> 3,
+                equipping, "minecraft:iron_pickaxe");
+        gatedMine.start();
+        assertEquals(gatedMine.status(), ActionStatus.SUCCESS, "satisfied before start still works");
+        assertEquals(equipping.lastEquipped, null, "no equip when already satisfied");
+        int[] diamonds = {0};
+        MineAction gatedMineLive = new MineAction("minecraft:diamond_ore", 0, 3, () -> diamonds[0],
+                equipping, "minecraft:iron_pickaxe");
+        gatedMineLive.start();
+        assertEquals(equipping.lastEquipped, "minecraft:iron_pickaxe",
+                "equips the qualifying pickaxe before issuing mining");
     }
 
     private static void validateAcquisitionTable() {
@@ -570,6 +585,8 @@ public final class AgentCli {
     }
 
     private static final class FakeBackend implements BaritoneIntegration {
+        String lastEquipped;
+
         @Override
         public boolean available() {
             return true;
@@ -582,6 +599,12 @@ public final class AgentCli {
 
         @Override
         public boolean startGoTo(int x, int y, int z) {
+            return true;
+        }
+
+        @Override
+        public boolean equip(String itemId) {
+            lastEquipped = itemId;
             return true;
         }
 

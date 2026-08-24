@@ -123,6 +123,34 @@ public final class DirectAcquisitions {
     private DirectAcquisitions() {
     }
 
+    /**
+     * The cheapest tool from {@code availableItemIds} that satisfies this
+     * item's gate — the one the agent should hold while mining. Empty
+     * for hand-gatherables or when nothing qualifies (planner will then
+     * fold tool acquisition into the plan separately).
+     */
+    public static Optional<String> qualifyingToolFor(String itemId,
+                                                     Set<String> availableItemIds) {
+        Acquisition acquisition = ACQUISITIONS.get(itemId);
+        if (acquisition == null || acquisition.tool() == ToolTier.HAND) {
+            return Optional.empty();
+        }
+        for (ToolTier tier : ToolTier.values()) {
+            if (tier.ordinal() < acquisition.tool().ordinal()) {
+                continue;
+            }
+            Set<String> atOrAbove = PICKAXES_AT_OR_ABOVE.get(tier);
+            Optional<String> match = availableItemIds.stream()
+                    .filter(atOrAbove::contains)
+                    .sorted()
+                    .findFirst();
+            if (match.isPresent()) {
+                return match;
+            }
+        }
+        return Optional.empty();
+    }
+
     /** Exposed for JVM smoke checks. */
     public static Map<String, String> all() {
         return ACQUISITIONS.entrySet().stream()

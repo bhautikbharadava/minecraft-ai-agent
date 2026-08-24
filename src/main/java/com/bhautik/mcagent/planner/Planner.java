@@ -153,13 +153,19 @@ public final class Planner {
             }
             String sourceBlock = DirectAcquisitions.sourceBlockFor(itemId).orElse(null);
             if (sourceBlock != null) {
-                String toolReason = DirectAcquisitions.missingToolReason(
-                        itemId, itemsOwnedOrPlanned());
+                Set<String> ownedOrPlanned = itemsOwnedOrPlanned();
+                String toolReason = DirectAcquisitions.missingToolReason(itemId, ownedOrPlanned);
                 if (toolReason != null) {
                     planMissingTool(itemId, toolReason);
                 }
+                // Hold the right tier while mining: wrong-tool breaks
+                // destroy gated ores without dropping anything.
+                String toolToHold = DirectAcquisitions
+                        .qualifyingToolFor(itemId, itemsOwnedOrPlanned())
+                        .orElse(null);
                 plan.add(new MineAction(sourceBlock, have, have + missing,
-                        () -> liveCounts.applyAsInt(itemId), baritoneIntegration));
+                        () -> liveCounts.applyAsInt(itemId), baritoneIntegration,
+                        toolToHold));
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }
