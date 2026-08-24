@@ -38,6 +38,14 @@ public final class DirectAcquisitions {
             ToolTier.DIAMOND, Set.of("minecraft:diamond_pickaxe", "minecraft:netherite_pickaxe")
     );
 
+    /** Deterministic cheapest tool satisfying each gated tier. */
+    private static final Map<ToolTier, String> SIMPLEST_TOOL = Map.of(
+            ToolTier.WOOD, "minecraft:wooden_pickaxe",
+            ToolTier.STONE, "minecraft:stone_pickaxe",
+            ToolTier.IRON, "minecraft:iron_pickaxe",
+            ToolTier.DIAMOND, "minecraft:diamond_pickaxe"
+    );
+
     private static final Map<String, Acquisition> ACQUISITIONS = Map.ofEntries(
             // Stones and earth
             Map.entry("minecraft:cobblestone", new Acquisition("minecraft:stone", ToolTier.WOOD)),
@@ -140,5 +148,18 @@ public final class DirectAcquisitions {
         boolean satisfied = ownedItemIds.stream().anyMatch(acceptable::contains);
         return satisfied ? null
                 : "requires " + acquisition.tool().name().toLowerCase() + " pickaxe or better";
+    }
+
+    /**
+     * The cheapest craftable tool that would satisfy this item's tool
+     * gate, so the planner can fold tool acquisition into the plan
+     * instead of refusing. Empty for hand-gatherables.
+     */
+    public static Optional<String> simplestToolFor(String itemId) {
+        Acquisition acquisition = ACQUISITIONS.get(itemId);
+        if (acquisition == null || acquisition.tool() == ToolTier.HAND) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(SIMPLEST_TOOL.get(acquisition.tool()));
     }
 }

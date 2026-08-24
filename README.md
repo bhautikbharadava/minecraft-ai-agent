@@ -40,6 +40,14 @@ Implemented:
   ingredients are reachable. Placement is skipped when a table is
   already within range, one placement is shared per plan, and gated
   crafts fail honestly if the table disappears mid-run.
+- **Tool ladders:** when a mineable item needs a pickaxe tier the agent
+  doesn't have, the planner folds the cheapest qualifying tool's whole
+  chain into the plan instead of refusing — `/agent get stone_pickaxe 1`
+  from bare hands mines logs, crafts planks/sticks/table, crafts and
+  places the table, crafts the wooden pickaxe, then mines stone and
+  crafts the stone pickaxe. If even that chain is unresolvable (e.g.
+  diamonds needing an iron pickaxe while iron requires smelting), the
+  refusal explains exactly which link failed.
 
 Not implemented yet: smelting (so `iron_ingot` chains still refuse),
 survival interruptions, exploration goals, LLM integration, or farms.

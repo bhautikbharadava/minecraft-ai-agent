@@ -166,6 +166,13 @@ public final class AgentCli {
                 return Optional.ofNullable(recipes.get(id));
             }
         };
+        // Tool-gated mining must fold tool acquisition into the plan:
+        // cobblestone with bare hands plans a wooden pickaxe first.
+        recipes.put("minecraft:wooden_pickaxe", tableRecipe("minecraft:wooden_pickaxe", 1,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
+                cell("minecraft:oak_planks"), SlotSpec.EMPTY,
+                cell("minecraft:stick"), SlotSpec.EMPTY,
+                SlotSpec.EMPTY, cell("minecraft:stick"), SlotSpec.EMPTY));
         CraftAction.Crafter crafter = (recipe, times) -> times;
         PlaceBlockAction.Placer placer = itemId -> PlaceBlockAction.Placer.Result.ok();
 
@@ -254,6 +261,42 @@ public final class AgentCli {
                 .filter(action -> action instanceof PlaceBlockAction)
                 .count();
         assertEquals(placements, 1L, "one placement per plan");
+
+        // Tool-gated mining with no pickaxe plans the pickaxe chain first:
+        // mine log -> planks -> sticks -> place table -> wooden_pickaxe -> mine.
+        List<AgentAction> cobblePlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of(), id -> 0, env(crafter, placer, false),
+                "minecraft:cobblestone", 3);
+        if (cobblePlan.size() != 7) {
+            throw new IllegalStateException("tool-first chain length: expected [7] got ["
+                    + cobblePlan.size() + "] " + cobblePlan.stream()
+                            .map(AgentAction::title).toList());
+        }
+        assertContains(cobblePlan.get(0).title(), "Mine");
+        assertContains(cobblePlan.get(5).title(), "wooden_pickaxe");
+        assertEquals(cobblePlan.get(6).getClass(), MineAction.class,
+                "mining comes after the tool is crafted");
+        placements = cobblePlan.stream()
+                .filter(action -> action instanceof PlaceBlockAction)
+                .count();
+        assertEquals(placements, 1L, "tool chain places exactly one table");
+
+        // Without any craftable qualifying tool the refusal stays honest
+        // and explains what could not be planned.
+        recipes.remove("minecraft:wooden_pickaxe");
+        try {
+            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
+                    env(crafter, placer, true), "minecraft:cobblestone", 3);
+            throw new IllegalStateException("ungateable mining must fail planning");
+        } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
+            assertContains(expected.getMessage(), "cannot plan a wooden_pickaxe");
+            assertContains(expected.getMessage(), "requires wood pickaxe");
+        }
+        recipes.put("minecraft:wooden_pickaxe", tableRecipe("minecraft:wooden_pickaxe", 1,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
+                cell("minecraft:oak_planks"), SlotSpec.EMPTY,
+                cell("minecraft:stick"), SlotSpec.EMPTY,
+                SlotSpec.EMPTY, cell("minecraft:stick"), SlotSpec.EMPTY));
 
         // Gated crafting fails honestly when the environment check dies.
         CraftAction gated = new CraftAction(recipes.get("minecraft:chest"), 1,

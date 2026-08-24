@@ -90,6 +90,9 @@ public final class Planner {
         /** Output already promised by earlier steps of this same plan, so
          * sibling branches never re-gather shared intermediates. */
         private final Map<String, Integer> produced = new HashMap<>();
+        /** Items whose tool gate is currently being satisfied up-tree,
+         * guarding against circular tool requirements. */
+        private final Set<String> toolChains = new HashSet<>();
         private boolean tableHandled;
 
         private Expansion(RecipeResolver resolver, Function<String, Integer> plannedCounts,
@@ -111,9 +114,10 @@ public final class Planner {
             }
             String sourceBlock = DirectAcquisitions.sourceBlockFor(itemId).orElse(null);
             if (sourceBlock != null) {
-                String toolReason = DirectAcquisitions.missingToolReason(itemId, ownedItemIds);
+                String toolReason = DirectAcquisitions.missingToolReason(
+                        itemId, itemsOwnedOrPlanned());
                 if (toolReason != null) {
-                    throw new PlanningException(toolReason);
+                    planMissingTool(itemId, toolReason);
                 }
                 plan.add(new MineAction(sourceBlock, have, have + missing,
                         () -> liveCounts.applyAsInt(itemId), baritoneIntegration));
@@ -158,6 +162,44 @@ public final class Planner {
             plan.add(new CraftAction(recipe, crafts, () -> liveCounts.applyAsInt(itemId),
                     environment.crafter(), tableGate));
             produced.merge(itemId, crafts * recipe.resultCount(), Integer::sum);
+        }
+
+        /**
+         * A gated block needs a tool the agent neither owns nor plans to
+         * own: fold the cheapest qualifying tool's full dependency chain
+         * into this plan (craft it before mining), or refuse honestly.
+         */
+        private void planMissingTool(String itemId, String toolReason) {
+            String tool = DirectAcquisitions.simplestToolFor(itemId)
+                    .orElseThrow(() -> new PlanningException(toolReason));
+            if (!toolChains.add(itemId)) {
+                throw new PlanningException("circular tool requirement for " + itemId);
+            }
+            try {
+                expand(tool, 1);
+            } catch (PlanningException unobtainableTool) {
+                throw new PlanningException(shortName(itemId) + " " + toolReason
+                        + "; cannot plan a " + shortName(tool) + ": "
+                        + unobtainableTool.getMessage());
+            } finally {
+                toolChains.remove(itemId);
+            }
+            String afterPlanning = DirectAcquisitions.missingToolReason(
+                    itemId, itemsOwnedOrPlanned());
+            if (afterPlanning != null) {
+                throw new PlanningException(afterPlanning);
+            }
+        }
+
+        /** Inventory ids plus everything earlier steps of this plan produce. */
+        private Set<String> itemsOwnedOrPlanned() {
+            Set<String> ownedOrPlanned = new HashSet<>(ownedItemIds);
+            ownedOrPlanned.addAll(produced.keySet());
+            return ownedOrPlanned;
+        }
+
+        private static String shortName(String itemId) {
+            return itemId.replaceFirst("^minecraft:", "");
         }
 
         private static int ceilDiv(int dividend, int divisor) {
