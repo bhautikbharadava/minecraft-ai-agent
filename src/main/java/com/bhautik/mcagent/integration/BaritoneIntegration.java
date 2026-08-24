@@ -245,6 +245,13 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             Object inventory = player.getClass().getMethod("getInventory").invoke(player);
             Method getItem = findMethod(inventory.getClass(), "getItem",
                     new Class<?>[]{int.class});
+            Method getSelectedItem = findMethod(inventory.getClass(), "getSelectedItem",
+                    new Class<?>[0]);
+            // Already in hand: nothing to switch, avoid churn.
+            if (getSelectedItem != null && new ItemStackView(
+                    getSelectedItem.invoke(inventory)).matches(itemId)) {
+                return true;
+            }
             Method setItem = findMethod(inventory.getClass(), "setItem",
                     new Class<?>[]{int.class,
                             Class.forName("net.minecraft.world.item.ItemStack")});

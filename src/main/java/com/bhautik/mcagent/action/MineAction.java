@@ -25,6 +25,7 @@ public final class MineAction implements AgentAction {
     private ActionStatus status = ActionStatus.PENDING;
     private String failureReason;
     private int issuesUsed;
+    private boolean equipped;
     private int lastCount;
     private int idleTicks;
 
@@ -116,11 +117,14 @@ public final class MineAction implements AgentAction {
             return;
         }
         McAgent.LOGGER.info("[Action] Started: {}", title);
-        if (preferredToolItemId != null && !backend.equip(preferredToolItemId)) {
-            // Best-effort: mining proceeds, but wrong-tier breaks may drop
-            // nothing and the idle timeout will surface it honestly.
-            McAgent.LOGGER.warn("[Recovery] Could not equip {} for {}",
-                    preferredToolItemId.replaceFirst("^minecraft:", ""), title);
+        if (preferredToolItemId != null && !equipped) {
+            equipped = backend.equip(preferredToolItemId);
+            if (!equipped) {
+                // Best-effort: mining proceeds, but wrong-tier breaks may
+                // drop nothing and the idle timeout will surface it honestly.
+                McAgent.LOGGER.warn("[Recovery] Could not equip {} for {}",
+                        preferredToolItemId.replaceFirst("^minecraft:", ""), title);
+            }
         }
         if (!backend.startMine(sourceBlockName, missing)) {
             fail("no navigation backend available: " + backend.describe());
