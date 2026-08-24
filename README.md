@@ -31,10 +31,45 @@ Implemented:
   existing inventory is credited first, and inventory-grid (2x2)
   recipes execute via a server-side `CraftAction` with output
   verification.
+- **Crafting table (M6):** recipes wider or taller than 2x2 plan
+  acquire-table → place → craft: the agent carries or crafts a
+  `crafting_table`, places it on a verified spot next to itself
+  (`PlaceBlockAction`, block-state verified), and crafts 3x3 recipes
+  against it — `/agent get chest 1` works end-to-end from bare hands,
+  as do `furnace`, `stone_pickaxe`, and other table-gated goods whose
+  ingredients are reachable. Placement is skipped when a table is
+  already within range, one placement is shared per plan, and gated
+  crafts fail honestly if the table disappears mid-run.
+- **Table reuse:** a placed table is remembered by world query, not
+  inventory — if one exists within walking distance (~48 blocks) the
+  planner emits `MoveAction` (Baritone goto) to reach it instead of
+  crafting another; only when none exists nearby does the agent build
+  one. Arrival is verified against live distance (PRD 13). Tables the
+  agent placed itself are collected afterwards (`BreakBlockAction`,
+  verified by cleared block state + returned item); pre-existing
+  tables are left untouched.
+- **Smelting (M7):** furnace recipes route through real furnaces —
+  `/agent get iron_ingot 1` plans mine raw iron, mine coal, place a
+  carried/crafted furnace, load both into the furnace's block entity,
+  and let it cook on real game ticks while the action monitors and
+  harvests output (PRD UC-06: never block the thread). Furnaces are
+  walked to when present, placed when missing, and collected after.
+  This completes the iron ladder: `/agent get iron_pickaxe 1` works
+  end-to-end from bare hands (logs → table → wooden pickaxe → stone →
+  stone pickaxe → iron ore → coal → smelt → iron pickaxe), and
+  `/agent get diamond_pickaxe 1` self-provides its entire prerequisite
+  chain including the iron pickaxe needed to mine diamond ore.
+- **Tool ladders:** when a mineable item needs a pickaxe tier the agent
+  doesn't have, the planner folds the cheapest qualifying tool's whole
+  chain into the plan instead of refusing — `/agent get stone_pickaxe 1`
+  from bare hands mines logs, crafts planks/sticks/table, crafts and
+  places the table, crafts the wooden pickaxe, then mines stone and
+  crafts the stone pickaxe. If even that chain is unresolvable (e.g.
+  diamonds needing an iron pickaxe while iron requires smelting), the
+  refusal explains exactly which link failed.
 
-Not implemented yet: crafting-table (3x3) usage and tools needing it,
-smelting, survival interruptions, exploration goals, LLM integration,
-or farms.
+Not implemented yet: survival interruptions, exploration goals, LLM
+integration, or farms.
 
 ### Execution backend
 
@@ -66,8 +101,8 @@ tool tier available? ──no──► FAILED "requires iron pickaxe or better"
 Baritone mines → live progress → verified count → SUCCESS / FAILED
 ```
 
-Smelted/crafted goods (e.g. `iron_ingot`) resolve but fail honestly
-until the smelting milestone lands.
+Smelted goods (e.g. `iron_ingot`) resolve but fail honestly until the
+smelting milestone lands.
 
 ## Versions
 
@@ -108,14 +143,19 @@ Once in a world, run:
 com.bhautik.mcagent
 ├── McAgent
 ├── command/AgentCommand
-├── action/AgentAction, ActionStatus, MineAction
+├── action/AgentAction, ActionStatus, MineAction, CraftAction,
+│         PlaceBlockAction
 ├── state/WorldState
 ├── state/WorldStateCollector
 ├── state/InventoryState
+├── world/TableLocator           (is-a-table-in-range seam)
 ├── goal/GoalService        (agent brain: plan → execute → verify → recover)
 ├── goal/Goal               (planner-facing seam, pre-execution)
-├── planner/Planner
+├── planner/Planner              (+ Environment: crafter/placer/locator seams)
 ├── executor/AgentExecutor  (single-action tick runner)
+├── crafting/RecipeResolver, VanillaRecipeResolver,
+│            VanillaCraftingExecutor
+├── integration/VanillaPlacementExecutor (placement + table detection)
 ├── item/MineableItems      (directly-mineable item → source block map)
 └── integration/BaritoneIntegration (reflective, swap-safe backend)
 

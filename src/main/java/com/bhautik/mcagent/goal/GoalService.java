@@ -1,6 +1,7 @@
 package com.bhautik.mcagent.goal;
 
 import com.bhautik.mcagent.McAgent;
+import com.bhautik.mcagent.action.ActionStatus;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.crafting.VanillaCraftingExecutor;
 import com.bhautik.mcagent.crafting.VanillaRecipeResolver;
@@ -30,7 +31,7 @@ import java.util.UUID;
  */
 public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
-    private static final int MAX_PLAN_ATTEMPTS = 2;
+    private static final int MAX_PLAN_ATTEMPTS = 3;
 
     /** JVM-only fallback used by the CLI smoke checks; in-game resolution uses the live registry. */
     private final ItemRegistry itemRegistry = ItemRegistry.vanillaDefaults();
@@ -148,6 +149,14 @@ public final class GoalService {
         }
         refreshSnapshot(player);
         int current = activeRun.snapshot.count(activeRun.item);
+        // Reality first (PRD 14): if the goal is already satisfied, no
+        // failure below matters.
+        if (finished.status() != ActionStatus.CANCELLED && current >= activeRun.requested) {
+            activeRun.goal.markSuccess();
+            McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
+            run = null;
+            return;
+        }
         switch (finished.status()) {
             case CANCELLED -> {
                 run = null;
@@ -155,31 +164,37 @@ public final class GoalService {
             case FAILED -> {
                 McAgent.LOGGER.warn("[Recovery] Action failed: {} ({})",
                         finished.title(), finished.failureReason());
-                if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
+                if (finished.bestEffort()) {
+                    // Cleanup steps never cost an attempt or sink the goal.
+                    McAgent.LOGGER.info("[Recovery] Best-effort step failed; continuing: {}",
+                            finished.title());
+                    advanceOrFinish(activeRun, current);
+                } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
                     McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
                 } else {
                     finishWithFailure(activeRun);
                 }
             }
-            default -> {
-                // Step finished; advance the plan or verify against reality.
-                if (current >= activeRun.requested) {
-                    activeRun.goal.markSuccess();
-                    McAgent.LOGGER.info("[Agent] Goal completed: {}",
-                            activeRun.goal.title());
-                    run = null;
-                } else if (!activeRun.queue.isEmpty() && launchNextAction()) {
-                    McAgent.LOGGER.info("[Planner] Advancing plan: {}", executor.currentTitle());
-                } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
-                    McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
-                } else {
-                    activeRun.goal.markFailed(
-                            "verified inventory has " + current + "/" + activeRun.requested
-                                    + " after all attempts");
-                    run = null;
-                }
-            }
+            default -> advanceOrFinish(activeRun, current);
         }
+    }
+
+    /** Moves to the next queued step, replans, or closes the run out. */
+    private void advanceOrFinish(ActiveRun activeRun, int current) {
+        if (!runQueueIsEmpty(activeRun) && launchNextAction()) {
+            McAgent.LOGGER.info("[Planner] Advancing plan: {}", executor.currentTitle());
+        } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
+            McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
+        } else {
+            activeRun.goal.markFailed(
+                    "verified inventory has " + current + "/" + activeRun.requested
+                            + " after all attempts");
+            run = null;
+        }
+    }
+
+    private boolean runQueueIsEmpty(ActiveRun activeRun) {
+        return activeRun.queue.isEmpty();
     }
 
     /** Plans from scratch and fills the run's action queue. */
@@ -211,13 +226,30 @@ public final class GoalService {
         activeRun.snapshot.setCount(activeRun.item, current);
         try {
             var countsNow = InventoryState.collect(player).itemCounts();
+            var environment = new com.bhautik.mcagent.planner.Planner.Environment(
+                    VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                    com.bhautik.mcagent.crafting.VanillaSmelter.forPlayer(player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.breaker(player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                    new VanillaRecipeResolver(activeRun.server,
+                            com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
+                    new com.bhautik.mcagent.crafting.VanillaSmeltingResolver(activeRun.server),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                            com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                            com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                    (x, y, z) -> player.distanceToSqr(x, y, z));
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
                     id -> countsNow.getOrDefault(id, 0),
                     countsNow.keySet(),
                     itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
-                    VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                    environment,
                     activeRun.item.id(),
                     activeRun.requested);
             if (actions.isEmpty()) {

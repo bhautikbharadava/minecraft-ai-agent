@@ -38,6 +38,14 @@ public final class DirectAcquisitions {
             ToolTier.DIAMOND, Set.of("minecraft:diamond_pickaxe", "minecraft:netherite_pickaxe")
     );
 
+    /** Deterministic cheapest tool satisfying each gated tier. */
+    private static final Map<ToolTier, String> SIMPLEST_TOOL = Map.of(
+            ToolTier.WOOD, "minecraft:wooden_pickaxe",
+            ToolTier.STONE, "minecraft:stone_pickaxe",
+            ToolTier.IRON, "minecraft:iron_pickaxe",
+            ToolTier.DIAMOND, "minecraft:diamond_pickaxe"
+    );
+
     private static final Map<String, Acquisition> ACQUISITIONS = Map.ofEntries(
             // Stones and earth
             Map.entry("minecraft:cobblestone", new Acquisition("minecraft:stone", ToolTier.WOOD)),
@@ -115,6 +123,34 @@ public final class DirectAcquisitions {
     private DirectAcquisitions() {
     }
 
+    /**
+     * The cheapest tool from {@code availableItemIds} that satisfies this
+     * item's gate — the one the agent should hold while mining. Empty
+     * for hand-gatherables or when nothing qualifies (planner will then
+     * fold tool acquisition into the plan separately).
+     */
+    public static Optional<String> qualifyingToolFor(String itemId,
+                                                     Set<String> availableItemIds) {
+        Acquisition acquisition = ACQUISITIONS.get(itemId);
+        if (acquisition == null || acquisition.tool() == ToolTier.HAND) {
+            return Optional.empty();
+        }
+        for (ToolTier tier : ToolTier.values()) {
+            if (tier.ordinal() < acquisition.tool().ordinal()) {
+                continue;
+            }
+            Set<String> atOrAbove = PICKAXES_AT_OR_ABOVE.get(tier);
+            Optional<String> match = availableItemIds.stream()
+                    .filter(atOrAbove::contains)
+                    .sorted()
+                    .findFirst();
+            if (match.isPresent()) {
+                return match;
+            }
+        }
+        return Optional.empty();
+    }
+
     /** Exposed for JVM smoke checks. */
     public static Map<String, String> all() {
         return ACQUISITIONS.entrySet().stream()
@@ -140,5 +176,18 @@ public final class DirectAcquisitions {
         boolean satisfied = ownedItemIds.stream().anyMatch(acceptable::contains);
         return satisfied ? null
                 : "requires " + acquisition.tool().name().toLowerCase() + " pickaxe or better";
+    }
+
+    /**
+     * The cheapest craftable tool that would satisfy this item's tool
+     * gate, so the planner can fold tool acquisition into the plan
+     * instead of refusing. Empty for hand-gatherables.
+     */
+    public static Optional<String> simplestToolFor(String itemId) {
+        Acquisition acquisition = ACQUISITIONS.get(itemId);
+        if (acquisition == null || acquisition.tool() == ToolTier.HAND) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(SIMPLEST_TOOL.get(acquisition.tool()));
     }
 }
