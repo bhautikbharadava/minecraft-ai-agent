@@ -25,6 +25,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Deque;
 import java.util.List;
@@ -40,6 +41,11 @@ public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
     private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
+    /** Items auto-stashed when dumping junk at the base chest. */
+    private static final List<String> JUNK_ITEMS = List.of(
+            "minecraft:cobblestone", "minecraft:dirt", "minecraft:granite",
+            "minecraft:diorite", "minecraft:andesite", "minecraft:tuff",
+            "minecraft:cobbled_deepslate", "minecraft:flint");
     /** Chunk radius for vanilla structure searches (16 chunks = 256 blocks). */
     private static final int STRUCTURE_SEARCH_RADIUS_CHUNKS = 16;
     /** Within this distance (squared) of a located structure, we are there. */
@@ -57,6 +63,11 @@ public final class GoalService {
     private final Object monitor = new Object();
 
     private ActiveRun run;
+
+    // Session home base (PRD M11 groundwork): anchor plus the chest the
+    // agent stores loot in. Not persisted across restarts yet.
+    private net.minecraft.core.BlockPos baseAnchor;
+    private net.minecraft.core.BlockPos baseChestPos;
 
     public GoalService(AgentExecutor executor) {
         this.executor = executor;
@@ -267,6 +278,94 @@ public final class GoalService {
         }
     }
 
+    /** Establishes (or reports) the home base at the player's position. */
+    public String base(ServerPlayer player) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent cancel first.";
+            }
+            var pos = player.blockPosition().immutable();
+            StringBuilder report = new StringBuilder("Base set at "
+                    + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+            var placer = com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                    .placer(player);
+            if (baseChestPos == null) {
+                var chestResult = placer.place(
+                        com.bhautik.mcagent.planner.Planner.BASE_CHEST_ITEM);
+                if (chestResult.success()) {
+                    baseChestPos = player.blockPosition();
+                    report.append("\nPlaced base chest");
+                } else {
+                    report.append("\nNo chest placed: ").append(chestResult.failureReason())
+                            .append(" (craft one with /agent get chest 1)");
+                }
+            } else {
+                report.append("\nBase chest already at ").append(baseChestPos.getX())
+                        .append(" ").append(baseChestPos.getY()).append(" ")
+                        .append(baseChestPos.getZ());
+            }
+            var tableResult = placer.place(
+                    com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM);
+            report.append(tableResult.success()
+                    ? "\nPlaced crafting table"
+                    : "\nNo crafting table placed: " + tableResult.failureReason());
+            baseAnchor = pos;
+            McAgent.LOGGER.info("[Agent] Base established at {} {} {}",
+                    pos.getX(), pos.getY(), pos.getZ());
+            return report.toString();
+        }
+    }
+
+    /** UC-09 groundwork: store items at the base chest. */
+    public String stash(ServerPlayer player, String itemArg, String amountArg) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent cancel first.";
+            }
+            if (baseChestPos == null) {
+                return "No base yet. Run /agent base here first.";
+            }
+            List<String> ids;
+            boolean dumpingJunk = itemArg.equals("*") || itemArg.equalsIgnoreCase("junk");
+            if (dumpingJunk) {
+                ids = JUNK_ITEMS;
+            } else {
+                Optional<MinecraftItem> resolved =
+                        resolve(itemArg).or(() -> resolve("minecraft:" + itemArg));
+                if (resolved.isEmpty()) {
+                    return "Invalid item name: " + itemArg;
+                }
+                ids = List.of(resolved.get().id());
+            }
+            int cap;
+            if (amountArg == null || amountArg.isBlank()
+                    || amountArg.equalsIgnoreCase("all")) {
+                cap = Integer.MAX_VALUE;
+            } else {
+                try {
+                    cap = Integer.parseInt(amountArg);
+                } catch (NumberFormatException badCount) {
+                    return "Invalid count: " + amountArg;
+                }
+            }
+            ExploreGoal goal = new ExploreGoal("stash " + itemArg, () -> false);
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            goalManager.register(goal);
+            ActiveRun activeRun = new ActiveRun(goal, null, player.getUUID(), 0,
+                    snapshot(player), player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            activeRun.stashIds = ids;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            return goal.progressReport() + System.lineSeparator()
+                    + "Storing " + String.join(", ", ids.size() > 3
+                            ? ids.subList(0, 3) : ids)
+                    + (ids.size() > 3 ? ", ..." : "") + " at base.";
+        }
+    }
+
     public String cancelActiveGoal() {
         synchronized (monitor) {
             if (run != null) {
@@ -420,8 +519,14 @@ public final class GoalService {
                     liveCountById(activeRun.server, activeRun.playerId, piece.id())
                             >= activeRun.requested);
         }
+        if (activeRun.stashIds != null) {
+            return runQueueIsEmpty(activeRun);
+        }
         if (activeRun.exploreTargetBiome != null) {
             return activeRun.exploreTargetBiome.equals(activeRun.biomeAt.current());
+        }
+        if (activeRun.stashIds != null) {
+            return runQueueIsEmpty(activeRun);
         }
         if (activeRun.structureTargetPos != null) {
             return activeRun.structureDistance.getAsDouble()
@@ -476,6 +581,29 @@ public final class GoalService {
                     roots);
             McAgent.LOGGER.info("[Planner] Kit plan generated: {}",
                     actions.stream().map(AgentAction::title).toList());
+            return actions;
+        }
+        if (activeRun.stashIds != null) {
+            var chest = baseChestPos;
+            if (chest == null) {
+                activeRun.goal.markFailed("no base chest");
+                return List.of();
+            }
+            java.util.function.DoubleSupplier distance = () ->
+                    player.distanceToSqr(chest.getX(), chest.getY(), chest.getZ());
+            List<AgentAction> actions = new ArrayList<>();
+            if (player.blockPosition().distSqr(chest) > 16.0) {
+                actions.add(new com.bhautik.mcagent.action.MoveAction("base chest",
+                        chest.getX(), chest.getY(), chest.getZ(),
+                        4.0 * 4.0, distance::getAsDouble,
+                        executor.baritoneIntegration()));
+            }
+            actions.add(new com.bhautik.mcagent.action.DepositAction(
+                    "Store at base", activeRun.stashIds,
+                    com.bhautik.mcagent.integration.VanillaStorage.depositor(player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS)));
+            McAgent.LOGGER.info("[Planner] Plan generated: [{} Store at base]",
+                    actions.size() > 1 ? "Travel," : "");
             return actions;
         }
         if (activeRun.exploreTargetBiome != null) {
@@ -684,6 +812,9 @@ public final class GoalService {
         net.minecraft.core.BlockPos structureTargetPos;
         /** Live distance to the structure target, wired with biomeAt. */
         java.util.function.DoubleSupplier structureDistance;
+
+        /** Non-null for stash runs: the ids allowed into the chest. */
+        List<String> stashIds;
 
         ActiveRun(AgentGoal goal, MinecraftItem item, UUID playerId, int requested,
                   dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,

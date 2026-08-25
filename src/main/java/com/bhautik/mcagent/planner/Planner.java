@@ -57,6 +57,8 @@ public final class Planner {
     public static final String FUEL_ITEM = "minecraft:coal";
     /** Lighting carried for tunnel safety (mob-spawn prevention). */
     public static final String TORCH_ITEM = "minecraft:torch";
+    /** Storage block of the home base. */
+    public static final String BASE_CHEST_ITEM = "minecraft:chest";
     /** Mining plans trigger a torch top-up when stock drops below this. */
     public static final int MIN_TORCHES = 16;
     /** Top-ups fill a full stack so long digs never run dark. */

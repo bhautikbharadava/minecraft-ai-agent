@@ -859,6 +859,22 @@ public final class AgentCli {
         assertEquals(trapped.status(), ActionStatus.FAILED, "unreachable air fails on timeout");
         assertContains(String.valueOf(trapped.failureReason()), "reach air");
 
+        // Storage: deposits until nothing matches, verified by counts.
+        java.util.List<String> storedIds = new java.util.ArrayList<>();
+        com.bhautik.mcagent.action.DepositAction deposit =
+                new com.bhautik.mcagent.action.DepositAction("Store at base",
+                        List.of("minecraft:cobblestone"),
+                        (ids, maxStacks) -> {
+                            storedIds.addAll(ids);
+                            return storedIds.size() > 3 ? 0 : 2; // 3 batches then empty
+                        });
+        deposit.start();
+        for (int i = 0; i < 5 && deposit.status() == ActionStatus.RUNNING; i++) {
+            deposit.tick();
+        }
+        assertEquals(deposit.status(), ActionStatus.SUCCESS, "deposit completes");
+        assertEquals(deposit.storedStacks(), 6, "all batches counted");
+
         // Suspension pauses without cancelling: the action comes back
         // re-launchable and the backend was told to stop.
         FakeBackend survivalBackend = new FakeBackend();

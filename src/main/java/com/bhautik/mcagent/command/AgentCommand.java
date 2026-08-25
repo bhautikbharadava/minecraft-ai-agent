@@ -43,6 +43,23 @@ public final class AgentCommand {
                                         context.getSource(),
                                         goalService,
                                         StringArgumentType.getString(context, "biome")))))
+                .then(Commands.literal("base")
+                        .executes(context -> {
+                            ServerPlayer player = context.getSource().getPlayerOrException();
+                            String report = goalService.base(player);
+                            context.getSource().sendSuccess(
+                                    () -> Component.literal(report), false);
+                            return 1;
+                        }))
+                .then(Commands.literal("stash")
+                        .then(Commands.argument("item", StringArgumentType.word())
+                                .executes(context -> stash(context.getSource(), goalService,
+                                        StringArgumentType.getString(context, "item"), "all")
+                                        )
+                                .then(Commands.argument("amount", StringArgumentType.word())
+                                        .executes(context -> stash(context.getSource(), goalService,
+                                                StringArgumentType.getString(context, "item"),
+                                                StringArgumentType.getString(context, "amount"))))))
                 .then(Commands.literal("goal")
                         .executes(context -> {
                             context.getSource().sendSuccess(() -> Component.literal(goalService.describeActiveGoal()), false);
@@ -87,6 +104,18 @@ public final class AgentCommand {
         }
         ServerPlayer player = source.getPlayerOrException();
         String report = goalService.getItem(player, itemName, count);
+        source.sendSuccess(() -> Component.literal(report), false);
+        return 1;
+    }
+
+    private static int stash(CommandSourceStack source, GoalService goalService,
+                             String item, String amount) throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        String report = goalService.stash(player, item, amount);
+        if (report.startsWith("Invalid") || report.startsWith("No base")) {
+            source.sendFailure(Component.literal(report));
+            return 0;
+        }
         source.sendSuccess(() -> Component.literal(report), false);
         return 1;
     }
