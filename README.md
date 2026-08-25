@@ -66,6 +66,11 @@ Implemented:
   nutritious food carried, wait out the danger, then resume where it
   left off. Starving with no food fails the goal honestly after a
   timeout instead of mining until death.
+- **Exploration (M9, biomes):** `/agent explore desert` verifies the
+  current biome first (already there = instant success), then wanders
+  outward through Baritone's explore process until the live biome
+  sensor reports arrival — verified independently, with re-issue on
+  stalls and an honest failure when the budget runs out.
 - **Tool ladders:** when a mineable item needs a pickaxe tier the agent
   doesn't have, the planner folds the cheapest qualifying tool's whole
   chain into the plan instead of refusing — `/agent get stone_pickaxe 1`
@@ -90,10 +95,11 @@ swapped for any navigation backend.
 ## Commands
 
 ```text
-/agent status                 show world/inventory snapshot and executor state
-/agent get <item> <count>     register a GetItemGoal and start executing it
-/agent goal                   report the active goal's live progress
-/agent cancel                 cancel the active goal and stop mining
+/agent status                    show world/inventory snapshot and executor state
+/agent get <item> <count>        register a GetItemGoal and start executing it
+/agent explore <biome>           travel to a biome and verify arrival (UC-08)
+/agent goal                      report the active goal's live progress
+/agent cancel                    cancel the active goal and stop navigation
 ```
 
 Items resolve against the live vanilla registry (`diamond`,

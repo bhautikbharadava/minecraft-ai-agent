@@ -37,6 +37,13 @@ public interface BaritoneIntegration {
      */
     boolean equip(String itemId);
 
+    /**
+     * Starts open-ended exploration outward from the given center
+     * coordinates. Arrival at whatever the agent seeks is verified by
+     * the calling action; stop() ends the wander.
+     */
+    boolean startExplore(int centerX, int centerZ);
+
     /** Stops any in-flight navigation owned by the agent. Safe to call repeatedly. */
     void stop();
 
@@ -62,6 +69,11 @@ public interface BaritoneIntegration {
 
             @Override
             public boolean equip(String itemId) {
+                return false;
+            }
+
+            @Override
+            public boolean startExplore(int centerX, int centerZ) {
                 return false;
             }
 
@@ -95,12 +107,14 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
 
     private final Object mineProcess;
     private final Object goalProcess;
+    private final Object exploreProcess;
     private final String initFailure;
 
     private ReflectiveBaritoneIntegration(Object mineProcess, Object goalProcess,
-                                          String initFailure) {
+                                          Object exploreProcess, String initFailure) {
         this.mineProcess = mineProcess;
         this.goalProcess = goalProcess;
+        this.exploreProcess = exploreProcess;
         this.initFailure = initFailure;
     }
 
@@ -111,6 +125,7 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             Object baritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
             Object mine = null;
             Object goal = null;
+            Object explore = null;
             try {
                 mine = baritone.getClass().getMethod("getMineProcess").invoke(baritone);
             } catch (Throwable ignored) {
@@ -121,24 +136,29 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             } catch (Throwable ignored) {
                 // goto unsupported; mining may still work
             }
-            if (mine == null && goal == null) {
-                return new ReflectiveBaritoneIntegration(null, null,
+            try {
+                explore = baritone.getClass().getMethod("getExploreProcess").invoke(baritone);
+            } catch (Throwable ignored) {
+                // exploration unsupported; the rest may still work
+            }
+            if (mine == null && goal == null && explore == null) {
+                return new ReflectiveBaritoneIntegration(null, null, null,
                         "no usable Baritone processes found");
             }
-            return new ReflectiveBaritoneIntegration(mine, goal, null);
+            return new ReflectiveBaritoneIntegration(mine, goal, explore, null);
         } catch (Throwable throwable) {
             Throwable root = throwable;
             while (root.getCause() != null) {
                 root = root.getCause();
             }
-            return new ReflectiveBaritoneIntegration(null, null,
+            return new ReflectiveBaritoneIntegration(null, null, null,
                     "Baritone not detected (" + root.getClass().getSimpleName() + ")");
         }
     }
 
     @Override
     public boolean available() {
-        return mineProcess != null || goalProcess != null;
+        return mineProcess != null || goalProcess != null || exploreProcess != null;
     }
 
     @Override
@@ -375,8 +395,29 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
     }
 
     @Override
+    public boolean startExplore(int centerX, int centerZ) {
+        if (exploreProcess == null) {
+            return false;
+        }
+        try {
+            Method explore = findMethod(exploreProcess.getClass(), "explore",
+                    new Class<?>[]{int.class, int.class});
+            if (explore == null) {
+                return false;
+            }
+            explore.setAccessible(true);
+            runOnClientThread(() -> explore.invoke(exploreProcess, centerX, centerZ));
+            return true;
+        } catch (Throwable throwable) {
+            Throwable root = rootOf(throwable);
+            McAgent.LOGGER.warn("Baritone explore request failed: {}", String.valueOf(root));
+            return false;
+        }
+    }
+
+    @Override
     public void stop() {
-        for (Object process : new Object[]{mineProcess, goalProcess}) {
+        for (Object process : new Object[]{mineProcess, goalProcess, exploreProcess}) {
             if (process == null) {
                 continue;
             }
@@ -394,7 +435,7 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
 
     @Override
     public String describe() {
-        if (mineProcess == null && goalProcess == null) {
+        if (mineProcess == null && goalProcess == null && exploreProcess == null) {
             return String.valueOf(initFailure);
         }
         StringBuilder description = new StringBuilder("Baritone");
@@ -403,6 +444,9 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
         }
         if (mineProcess == null) {
             description.append(" (no mining)");
+        }
+        if (exploreProcess == null) {
+            description.append(" (no explore)");
         }
         return description.toString();
     }

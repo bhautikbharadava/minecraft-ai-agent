@@ -10,7 +10,9 @@ import com.bhautik.mcagent.executor.AgentExecutor;
 import com.bhautik.mcagent.integration.VanillaSurvivalMonitor;
 import com.bhautik.mcagent.state.InventoryState;
 import com.bhautik.mcagent.survival.Threat;
+import dev.minecraftai.agent.goal.AgentGoal;
 import dev.minecraftai.agent.goal.AgentGoalManager;
+import dev.minecraftai.agent.goal.ExploreGoal;
 import dev.minecraftai.agent.goal.GetItemGoal;
 import dev.minecraftai.agent.goal.GoalStatus;
 import dev.minecraftai.agent.item.ItemRegistry;
@@ -118,6 +120,71 @@ public final class GoalService {
         }
     }
 
+    /** True when the named biome exists in the given world's registry. */
+    public boolean isValidBiome(net.minecraft.world.level.Level level, String rawName) {
+        return resolveBiome(level, rawName).isPresent();
+    }
+
+    private Optional<String> resolveBiome(net.minecraft.world.level.Level level,
+                                          String rawName) {
+        if (rawName == null || rawName.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = rawName.trim().toLowerCase();
+        String qualified = normalized.contains(":") ? normalized : "minecraft:" + normalized;
+        net.minecraft.resources.Identifier id = Identifier.tryParse(qualified);
+        if (id == null) {
+            return Optional.empty();
+        }
+        boolean exists = level.registryAccess()
+                .lookupOrThrow(net.minecraft.core.registries.Registries.BIOME)
+                .getOptional(id).isPresent();
+        return exists ? Optional.of(qualified) : Optional.empty();
+    }
+
+    /** UC-08: travel to and verify a named biome. */
+    public String explore(ServerPlayer player, String rawBiomeName) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
+            }
+            String targetBiome = resolveBiome(player.level(), rawBiomeName)
+                    .orElseThrow(() -> new IllegalArgumentException("invalid biome"));
+            com.bhautik.mcagent.world.BiomeSensor biomeAt = () ->
+                    player.level().getBiome(player.blockPosition()).unwrapKey()
+                            .map(key -> key.identifier().toString()).orElse("");
+            ExploreGoal goal = new ExploreGoal(
+                    rawBiomeName.trim().toLowerCase(),
+                    () -> targetBiome.equals(biomeAt.current()));
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            goalManager.register(goal);
+            if (goal.status() == GoalStatus.SUCCESS) {
+                McAgent.LOGGER.info("[Agent] Goal completed immediately: {}", goal.title());
+                return goal.progressReport();
+            }
+            ActiveRun activeRun = new ActiveRun(goal, null, player.getUUID(), 0,
+                    snapshot(player), player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            activeRun.exploreTargetBiome = targetBiome;
+            activeRun.biomeAt = biomeAt;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            var started = executor.pollFinished();
+            if (started.isPresent()) {
+                ActiveRun failedRun = run;
+                run = null;
+                failedRun.goal.markFailed(started.get().failureReason());
+                McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
+                        failedRun.goal.title(), failedRun.goal.failureReason());
+                return failedRun.goal.progressReport();
+            }
+            return goal.progressReport()
+                    + System.lineSeparator() + "Agent is exploring. Use /agent goal for progress.";
+        }
+    }
+
     public String cancelActiveGoal() {
         synchronized (monitor) {
             if (run != null) {
@@ -190,10 +257,11 @@ public final class GoalService {
             return;
         }
         refreshSnapshot(player);
-        int current = activeRun.snapshot.count(activeRun.item);
+        int current = activeRun.item == null ? 0
+                : activeRun.snapshot.count(activeRun.item);
         // Reality first (PRD 14): if the goal is already satisfied, no
         // failure below matters.
-        if (finished.status() != ActionStatus.CANCELLED && current >= activeRun.requested) {
+        if (finished.status() != ActionStatus.CANCELLED && isSatisfied(activeRun, current)) {
             activeRun.goal.markSuccess();
             McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
             run = null;
@@ -245,11 +313,19 @@ public final class GoalService {
         } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
             McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
         } else {
-            activeRun.goal.markFailed(
-                    "verified inventory has " + current + "/" + activeRun.requested
+            activeRun.goal.markFailed(activeRun.exploreTargetBiome != null
+                    ? "target biome not reached after all attempts"
+                    : "verified inventory has " + current + "/" + activeRun.requested
                             + " after all attempts");
             run = null;
         }
+    }
+
+    /** Goal completion against live state, for items and exploration. */
+    private boolean isSatisfied(ActiveRun activeRun, int current) {
+        return activeRun.exploreTargetBiome != null
+                ? activeRun.exploreTargetBiome.equals(activeRun.biomeAt.current())
+                : current >= activeRun.requested;
     }
 
     private boolean runQueueIsEmpty(ActiveRun activeRun) {
@@ -283,6 +359,15 @@ public final class GoalService {
         ServerPlayer player = activeRun.server.getPlayerList().getPlayer(activeRun.playerId);
         if (player == null) {
             return List.of();
+        }
+        if (activeRun.exploreTargetBiome != null) {
+            // M9: one open-ended explore step; verification is live biome.
+            net.minecraft.core.BlockPos center = player.blockPosition();
+            McAgent.LOGGER.info("[Planner] Plan generated: [Explore to {}]",
+                    activeRun.exploreTargetBiome.replaceFirst("^minecraft:", ""));
+            return List.of(new com.bhautik.mcagent.action.ExploreAction(
+                    activeRun.exploreTargetBiome, center.getX(), center.getZ(),
+                    activeRun.biomeAt::current, executor.baritoneIntegration()));
         }
         int current = activeRun.snapshot.count(activeRun.item);
         activeRun.snapshot.setCount(activeRun.item, current);
@@ -393,8 +478,8 @@ public final class GoalService {
 
     private void refreshSnapshot(ServerPlayer player) {
         ActiveRun activeRun = run;
-        if (activeRun == null) {
-            return;
+        if (activeRun == null || activeRun.item == null) {
+            return; // exploration runs track biomes, not item counts
         }
         activeRun.snapshot.setCount(activeRun.item, liveCount(player, activeRun));
     }
@@ -427,7 +512,7 @@ public final class GoalService {
     }
 
     private static final class ActiveRun {
-        final GetItemGoal goal;
+        final AgentGoal goal;
         final Deque<AgentAction> queue = new ArrayDeque<>();
         final MinecraftItem item;
         final UUID playerId;
@@ -443,8 +528,12 @@ public final class GoalService {
         boolean needsEmergencyFood;
         /** True while the queue works through gathered emergency food. */
         boolean securingFood;
+        /** Non-null for exploration runs (M9): the qualified biome id. */
+        String exploreTargetBiome;
+        /** Live biome under the agent, wired only for exploration runs. */
+        com.bhautik.mcagent.world.BiomeSensor biomeAt;
 
-        ActiveRun(GetItemGoal goal, MinecraftItem item, UUID playerId, int requested,
+        ActiveRun(AgentGoal goal, MinecraftItem item, UUID playerId, int requested,
                   dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,
                   com.bhautik.mcagent.survival.SurvivalMonitor survivalMonitor) {
             this.goal = goal;

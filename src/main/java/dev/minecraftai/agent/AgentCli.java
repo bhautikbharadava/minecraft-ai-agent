@@ -39,6 +39,7 @@ public final class AgentCli {
             validateAcquisitionTable();
             validateDependencyPlanning();
             validateSurvivalInterruptions();
+            validateExploration();
             return;
         }
         System.out.println(handler.handle(String.join(" ", args)));
@@ -624,6 +625,57 @@ public final class AgentCli {
         assertEquals(minable.status(), ActionStatus.SUCCESS, "relaunched action completes");
     }
 
+    /**
+     * M9 checks: exploration verifies arrival against the live biome
+     * sensor, re-issues on stalls, and fails honestly when the target
+     * never turns up.
+     */
+    private static void validateExploration() {
+        // Goal lifecycle: immediate success when already there.
+        dev.minecraftai.agent.goal.ExploreGoal arrived =
+                new dev.minecraftai.agent.goal.ExploreGoal("desert", () -> true);
+        arrived.activate();
+        assertEquals(arrived.status(), dev.minecraftai.agent.goal.GoalStatus.SUCCESS,
+                "already-in-biome succeeds on activate");
+        assertContains(arrived.progressReport(), "Target biome: desert");
+
+        dev.minecraftai.agent.goal.ExploreGoal traveling =
+                new dev.minecraftai.agent.goal.ExploreGoal("jungle", () -> false);
+        traveling.activate();
+        assertEquals(traveling.status(), dev.minecraftai.agent.goal.GoalStatus.ACTIVE,
+                "travel goal starts active");
+        traveling.markSuccess();
+        if (traveling.status() != dev.minecraftai.agent.goal.GoalStatus.ACTIVE) {
+            throw new IllegalStateException("markSuccess must respect the live check");
+        }
+
+        // Action: arrival verified by sensor, not backend claims.
+        FakeBackend exploringBackend = new FakeBackend();
+        String[] biome = {"minecraft:plains"};
+        com.bhautik.mcagent.action.ExploreAction explore =
+                new com.bhautik.mcagent.action.ExploreAction(
+                        "minecraft:desert", 100, 200, () -> biome[0], exploringBackend);
+        explore.start();
+        assertEquals(explore.status(), ActionStatus.RUNNING, "exploring while away");
+        biome[0] = "minecraft:desert";
+        explore.tick();
+        assertEquals(explore.status(), ActionStatus.SUCCESS, "arrival verified by biome");
+
+        // Never arriving exhausts the retry ladder honestly.
+        com.bhautik.mcagent.action.ExploreAction hopeless =
+                new com.bhautik.mcagent.action.ExploreAction(
+                        "minecraft:mushroom_fields", 0, 0, () -> "minecraft:plains",
+                        new FakeBackend());
+        hopeless.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.ExploreAction.IDLE_TIMEOUT_TICKS
+                * com.bhautik.mcagent.action.ExploreAction.MAX_ISSUE_ATTEMPTS; i++) {
+            hopeless.tick();
+        }
+        assertEquals(hopeless.status(), ActionStatus.FAILED,
+                "unfound biome fails after full budget");
+        assertContains(String.valueOf(hopeless.failureReason()), "not reached");
+    }
+
     private static SlotSpec cell(String itemId) {
         return new SlotSpec(List.of(itemId));
     }
@@ -669,6 +721,14 @@ public final class AgentCli {
 
         @Override
         public boolean startGoTo(int x, int y, int z) {
+            return true;
+        }
+
+        int exploreCalls;
+
+        @Override
+        public boolean startExplore(int centerX, int centerZ) {
+            exploreCalls++;
             return true;
         }
 

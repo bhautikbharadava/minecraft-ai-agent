@@ -37,6 +37,12 @@ public final class AgentCommand {
                                                 goalService,
                                                 StringArgumentType.getString(context, "item"),
                                                 IntegerArgumentType.getInteger(context, "count"))))))
+                .then(Commands.literal("explore")
+                        .then(Commands.argument("biome", StringArgumentType.word())
+                                .executes(context -> explore(
+                                        context.getSource(),
+                                        goalService,
+                                        StringArgumentType.getString(context, "biome")))))
                 .then(Commands.literal("goal")
                         .executes(context -> {
                             context.getSource().sendSuccess(() -> Component.literal(goalService.describeActiveGoal()), false);
@@ -50,7 +56,19 @@ public final class AgentCommand {
     }
 
     private static int sendUsage(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item> <count> | /agent goal | /agent cancel"), false);
+        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item> <count> | /agent explore <biome> | /agent goal | /agent cancel"), false);
+        return 1;
+    }
+
+    private static int explore(CommandSourceStack source, GoalService goalService, String biomeName)
+            throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        if (!goalService.isValidBiome(player.level(), biomeName)) {
+            source.sendFailure(Component.literal("Invalid biome name: " + biomeName));
+            return 0;
+        }
+        String report = goalService.explore(player, biomeName);
+        source.sendSuccess(() -> Component.literal(report), false);
         return 1;
     }
 

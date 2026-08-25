@@ -33,7 +33,14 @@ public final class AgentCommandHandler {
         if (parts.length == 4 && "get".equals(parts[1])) {
             return get(parts[2], parts[3]);
         }
-        return "Usage: /agent get <item> <count>, /agent goal, or /agent cancel";
+        if (parts.length == 3 && "explore".equals(parts[1])) {
+            // CLI has no live biome sensor; the goal stays ACTIVE and is
+            // verified in-game.
+            return goalManager.register(
+                    new dev.minecraftai.agent.goal.ExploreGoal(parts[2], () -> false))
+                    .progressReport();
+        }
+        return "Usage: /agent get <item> <count>, /agent explore <biome>, /agent goal, or /agent cancel";
     }
 
     private String get(String itemName, String countText) {
