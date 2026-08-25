@@ -539,6 +539,56 @@ public final class AgentCli {
             throw new IllegalStateException("mining must poll the tunnel lighter");
         }
 
+        // Sailing: launch failure is honest; arrival dismounts and wins.
+        com.bhautik.mcagent.action.SailAction.Sailor refusing =
+                new com.bhautik.mcagent.action.SailAction.Sailor() {
+                    @Override public boolean launch() { return false; }
+                    @Override public void steer(int targetX, int targetZ) { }
+                    @Override public boolean mounted() { return false; }
+                    @Override public void dismount() { }
+                };
+        double[] sea = {100.0};
+        com.bhautik.mcagent.action.SailAction stranded =
+                new com.bhautik.mcagent.action.SailAction(
+                        -300, 400, 5.0, () -> sea[0], refusing);
+        stranded.start();
+        assertEquals(stranded.status(), ActionStatus.RUNNING, "first launch attempt pending");
+        for (int i = 0; i < com.bhautik.mcagent.action.SailAction.MAX_ISSUE_ATTEMPTS + 1
+                && stranded.status() == ActionStatus.RUNNING; i++) {
+            stranded.tick();
+        }
+        assertEquals(stranded.status(), ActionStatus.FAILED, "no boat fails honestly");
+        assertContains(String.valueOf(stranded.failureReason()), "could not launch");
+
+        int[] steers = {0};
+        boolean[] aboard = {true};
+        boolean[] launchedOnce = {false};
+        com.bhautik.mcagent.action.SailAction.Sailor captain =
+                new com.bhautik.mcagent.action.SailAction.Sailor() {
+                    @Override public boolean launch() {
+                        launchedOnce[0] = true;
+                        return true;
+                    }
+                    @Override public void steer(int targetX, int targetZ) {
+                        steers[0]++;
+                        sea[0] -= 5.0;
+                    }
+                    @Override public boolean mounted() { return aboard[0]; }
+                    @Override public void dismount() { aboard[0] = false; }
+                };
+        com.bhautik.mcagent.action.SailAction crossing =
+                new com.bhautik.mcagent.action.SailAction(
+                        -300, 400, 5.0, () -> sea[0], captain);
+        crossing.start();
+        assertEquals(crossing.status(), ActionStatus.RUNNING, "launched afloat");
+        for (int i = 0; i < 200 && crossing.status() == ActionStatus.RUNNING; i++) {
+            crossing.tick();
+        }
+        assertEquals(crossing.status(), ActionStatus.SUCCESS, "arrival verified by distance");
+        if (steers[0] == 0 || !launchedOnce[0] || aboard[0]) {
+            throw new IllegalStateException("must launch, steer, and dismount");
+        }
+
         // Structure directory: friendly names resolve to vanilla tags.
         assertContains(String.valueOf(
                 com.bhautik.mcagent.world.StructureDirectory.tagFor("village").orElseThrow()),

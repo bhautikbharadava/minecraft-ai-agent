@@ -43,6 +43,14 @@ public final class AgentCommand {
                                         context.getSource(),
                                         goalService,
                                         StringArgumentType.getString(context, "biome")))))
+                .then(Commands.literal("sail")
+                        .then(Commands.argument("x", IntegerArgumentType.integer())
+                                .then(Commands.argument("z", IntegerArgumentType.integer())
+                                        .executes(context -> sail(
+                                                context.getSource(),
+                                                goalService,
+                                                IntegerArgumentType.getInteger(context, "x"),
+                                                IntegerArgumentType.getInteger(context, "z"))))))
                 .then(Commands.literal("goal")
                         .executes(context -> {
                             context.getSource().sendSuccess(() -> Component.literal(goalService.describeActiveGoal()), false);
@@ -86,6 +94,14 @@ public final class AgentCommand {
         }
         ServerPlayer player = source.getPlayerOrException();
         String report = goalService.getItem(player, itemName, count);
+        source.sendSuccess(() -> Component.literal(report), false);
+        return 1;
+    }
+
+    private static int sail(CommandSourceStack source, GoalService goalService, int x, int z)
+            throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        String report = goalService.sail(player, x, z);
         source.sendSuccess(() -> Component.literal(report), false);
         return 1;
     }

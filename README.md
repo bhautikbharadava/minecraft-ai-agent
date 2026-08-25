@@ -87,6 +87,11 @@ Implemented:
   crafts the stone pickaxe. If even that chain is unresolvable (e.g.
   diamonds needing an iron pickaxe while iron requires smelting), the
   refusal explains exactly which link failed.
+- **Boat sailing (M9):** `/agent sail <x> <z>` — standing in water with
+  a boat in inventory, the agent spawns it, mounts, and steers
+  client-side every tick until the waypoint is reached, then dismounts.
+  Losing the boat or stalling fails honestly. (Craft one first:
+  `/agent get boat 1`.)
 - **Structure discovery (M9):** `/agent explore village` locates the
   nearest tagged structure via vanilla world lookup and walks there —
   arrival verified against live distance. Also searchable: mineshaft,
