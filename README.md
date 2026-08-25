@@ -60,12 +60,13 @@ Implemented:
   `/agent get diamond_pickaxe 1` self-provides its entire prerequisite
   chain including the iron pickaxe needed to mine diamond ore.
 - **Survival interruptions (M8):** every half second the active run is
-  assessed (health ≤ 4 hearts or hunger ≤ 3 suspends work). On
-  emergency the current action is *paused* — navigation stopped, state
-  kept — re-queued, and a recovery step jumps the queue: eat the most
-  nutritious food carried, wait out the danger, then resume where it
-  left off. Starving with no food fails the goal honestly after a
-  timeout instead of mining until death.
+  assessed (health ≤ 4 hearts, hunger ≤ 3, or low oxygen all suspend
+  work). On emergency the current action is *paused* — navigation
+  stopped, state kept — re-queued, and a recovery step jumps the queue:
+  eat the most nutritious food carried, or swim upward when drowning,
+  then resume where it left off. Starving with no food fails the goal
+  honestly after a timeout instead of mining until death; trapped
+  underwater fails instead of silently drowning.
 - **Exploration (M9, biomes):** `/agent explore desert` verifies the
   current biome first (already there = instant success), then wanders
   outward through Baritone's explore process until the live biome
@@ -86,6 +87,10 @@ Implemented:
   crafts the stone pickaxe. If even that chain is unresolvable (e.g.
   diamonds needing an iron pickaxe while iron requires smelting), the
   refusal explains exactly which link failed.
+- **Structure discovery (M9):** `/agent explore village` locates the
+  nearest tagged structure via vanilla world lookup and walks there —
+  arrival verified against live distance. Also searchable: mineshaft,
+  stronghold, shipwreck, ruined_portal, buried_treasure.
 - **Biome-gated gathering:** biome-locked resources chain exploration
   automatically — `/agent get cactus 8` from a plains start plans
   `[Explore to desert, Mine cactus]`, skipping the travel step when

@@ -24,6 +24,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayDeque;
+import java.util.Map;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
@@ -38,6 +39,10 @@ public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
     private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
+    /** Chunk radius for vanilla structure searches (16 chunks = 256 blocks). */
+    private static final int STRUCTURE_SEARCH_RADIUS_CHUNKS = 16;
+    /** Within this distance (squared) of a located structure, we are there. */
+    private static final double STRUCTURE_ARRIVE_DISTANCE_SQ = 48.0 * 48.0;
     /** Gatherable foods the agent plans for itself when starving. */
     private static final List<String> EMERGENCY_FOODS = List.of(
             "minecraft:sweet_berries", "minecraft:brown_mushroom",
@@ -185,6 +190,55 @@ public final class GoalService {
         }
     }
 
+    /** M9: locate the nearest tagged structure and travel to it. */
+    public String exploreStructure(ServerPlayer player, String rawName) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
+            }
+            String tagId = com.bhautik.mcagent.world.StructureDirectory.tagFor(rawName)
+                    .orElseThrow(() -> new IllegalArgumentException("unknown structure"));
+            var level = (net.minecraft.server.level.ServerLevel) player.level();
+            var tag = net.minecraft.tags.TagKey.create(
+                    net.minecraft.core.registries.Registries.STRUCTURE,
+                    Identifier.parse("minecraft:" + tagId));
+            net.minecraft.core.BlockPos found = level.findNearestMapStructure(
+                    tag, player.blockPosition(), STRUCTURE_SEARCH_RADIUS_CHUNKS, false);
+            if (found == null) {
+                return "No " + rawName + " found within "
+                        + (STRUCTURE_SEARCH_RADIUS_CHUNKS * 16) + " blocks of here.";
+            }
+            net.minecraft.core.BlockPos target = found.immutable();
+            McAgent.LOGGER.info("[Agent] Located {} at {} {} {}", rawName,
+                    target.getX(), target.getY(), target.getZ());
+            java.util.function.DoubleSupplier distance =
+                    () -> player.distanceToSqr(target.getX(), target.getY(), target.getZ());
+            ExploreGoal goal = new ExploreGoal(rawName.trim().toLowerCase(),
+                    () -> distance.getAsDouble() <= STRUCTURE_ARRIVE_DISTANCE_SQ);
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            goalManager.register(goal);
+            ActiveRun activeRun = new ActiveRun(goal, null, player.getUUID(), 0,
+                    snapshot(player), player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            activeRun.structureTargetPos = target;
+            activeRun.structureDistance = distance;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            var started = executor.pollFinished();
+            if (started.isPresent()) {
+                ActiveRun failedRun = run;
+                run = null;
+                failedRun.goal.markFailed(started.get().failureReason());
+                return failedRun.goal.progressReport();
+            }
+            return goal.progressReport() + System.lineSeparator()
+                    + "Heading to " + rawName + " at " + target.getX() + " "
+                    + target.getY() + " " + target.getZ() + ".";
+        }
+    }
+
     public String cancelActiveGoal() {
         synchronized (monitor) {
             if (run != null) {
@@ -243,8 +297,12 @@ public final class GoalService {
         if (suspended != null) {
             activeRun.queue.addFirst(suspended);
         }
-        activeRun.queue.addFirst(new RecoverAction(activeRun.survivalMonitor,
-                VanillaSurvivalMonitor.feeder(player)));
+        AgentAction recovery = threat.needsAir()
+                ? new com.bhautik.mcagent.action.SurfaceAction(activeRun.survivalMonitor,
+                        VanillaSurvivalMonitor.swimmer(player))
+                : new RecoverAction(activeRun.survivalMonitor,
+                        VanillaSurvivalMonitor.feeder(player));
+        activeRun.queue.addFirst(recovery);
         activeRun.recovering = true;
         McAgent.LOGGER.warn("[Recovery] Survival interrupt ({}); recovering before resuming",
                 threat.reason());
@@ -267,7 +325,8 @@ public final class GoalService {
             run = null;
             return;
         }
-        if (finished instanceof RecoverAction) {
+        if (finished instanceof RecoverAction
+                || finished instanceof com.bhautik.mcagent.action.SurfaceAction) {
             activeRun.recovering = false;
             if (finished.status() == ActionStatus.SUCCESS) {
                 activeRun.needsEmergencyFood = false;
@@ -321,11 +380,21 @@ public final class GoalService {
         }
     }
 
+
+    private static String rawName(net.minecraft.core.BlockPos pos) {
+        return pos.getX() + " " + pos.getY() + " " + pos.getZ();
+    }
+
     /** Goal completion against live state, for items and exploration. */
     private boolean isSatisfied(ActiveRun activeRun, int current) {
-        return activeRun.exploreTargetBiome != null
-                ? activeRun.exploreTargetBiome.equals(activeRun.biomeAt.current())
-                : current >= activeRun.requested;
+        if (activeRun.exploreTargetBiome != null) {
+            return activeRun.exploreTargetBiome.equals(activeRun.biomeAt.current());
+        }
+        if (activeRun.structureTargetPos != null) {
+            return activeRun.structureDistance.getAsDouble()
+                    <= STRUCTURE_ARRIVE_DISTANCE_SQ;
+        }
+        return current >= activeRun.requested;
     }
 
     private boolean runQueueIsEmpty(ActiveRun activeRun) {
@@ -369,35 +438,23 @@ public final class GoalService {
                     activeRun.exploreTargetBiome, center.getX(), center.getZ(),
                     activeRun.biomeAt::current, executor.baritoneIntegration()));
         }
+        if (activeRun.structureTargetPos != null) {
+            // M9 structures: walk to the located position; arrival is
+            // verified against live distance by the goal check.
+            var target = activeRun.structureTargetPos;
+            McAgent.LOGGER.info("[Planner] Plan generated: [Travel to {}]", rawName(target));
+            return List.of(new com.bhautik.mcagent.action.MoveAction(
+                    activeRun.goal.title().replace("Explore to ", ""),
+                    target.getX(), target.getY(), target.getZ(),
+                    Math.sqrt(STRUCTURE_ARRIVE_DISTANCE_SQ),
+                    () -> activeRun.structureDistance.getAsDouble(),
+                    executor.baritoneIntegration()));
+        }
         int current = activeRun.snapshot.count(activeRun.item);
         activeRun.snapshot.setCount(activeRun.item, current);
         try {
             var countsNow = InventoryState.collect(player).itemCounts();
-            var environment = new com.bhautik.mcagent.planner.Planner.Environment(
-                    VanillaCraftingExecutor.forPlayer(player, activeRun.server),
-                    com.bhautik.mcagent.crafting.VanillaSmelter.forPlayer(player,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.breaker(player,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    new VanillaRecipeResolver(activeRun.server,
-                            com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
-                    new com.bhautik.mcagent.crafting.VanillaSmeltingResolver(activeRun.server),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
-                            com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
-                            com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    (x, y, z) -> player.distanceToSqr(x, y, z),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
-                            com.bhautik.mcagent.planner.Planner.TORCH_ITEM),
-                    () -> player.level().getBiome(player.blockPosition()).unwrapKey()
-                            .map(key -> key.identifier().toString()).orElse(""),
-                    new com.bhautik.mcagent.world.PositionAnchor() {
-                        @Override public int x() { return player.blockPosition().getX(); }
-                        @Override public int z() { return player.blockPosition().getZ(); }
-                    });
+            var environment = environmentFor(activeRun, player, countsNow);
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
@@ -431,6 +488,37 @@ public final class GoalService {
             activeRun.goal.markFailed(planningFailure.getMessage());
             return List.of();
         }
+    }
+
+    /** Builds the full execution seam bundle against live world state. */
+    private com.bhautik.mcagent.planner.Planner.Environment environmentFor(
+            ActiveRun activeRun, ServerPlayer player,
+            Map<String, Integer> countsNow) {
+        return new com.bhautik.mcagent.planner.Planner.Environment(
+                VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                com.bhautik.mcagent.crafting.VanillaSmelter.forPlayer(player,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.breaker(player,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                new VanillaRecipeResolver(activeRun.server,
+                        com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
+                new com.bhautik.mcagent.crafting.VanillaSmeltingResolver(activeRun.server),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                        com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                        com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                (x, y, z) -> player.distanceToSqr(x, y, z),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
+                        com.bhautik.mcagent.planner.Planner.TORCH_ITEM),
+                () -> player.level().getBiome(player.blockPosition()).unwrapKey()
+                        .map(key -> key.identifier().toString()).orElse(""),
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    @Override public int x() { return player.blockPosition().getX(); }
+                    @Override public int z() { return player.blockPosition().getZ(); }
+                });
     }
 
     /**
@@ -540,6 +628,10 @@ public final class GoalService {
         String exploreTargetBiome;
         /** Live biome under the agent, wired only for exploration runs. */
         com.bhautik.mcagent.world.BiomeSensor biomeAt;
+        /** Non-null for structure runs (M9): the located block position. */
+        net.minecraft.core.BlockPos structureTargetPos;
+        /** Live distance to the structure target, wired with biomeAt. */
+        java.util.function.DoubleSupplier structureDistance;
 
         ActiveRun(AgentGoal goal, MinecraftItem item, UUID playerId, int requested,
                   dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,

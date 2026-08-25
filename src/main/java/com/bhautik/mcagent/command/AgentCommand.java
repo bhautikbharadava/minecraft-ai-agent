@@ -56,18 +56,24 @@ public final class AgentCommand {
     }
 
     private static int sendUsage(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item> <count> | /agent explore <biome> | /agent goal | /agent cancel"), false);
+        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item> <count> | /agent explore <biome|structure> | /agent goal | /agent cancel"), false);
         return 1;
     }
 
-    private static int explore(CommandSourceStack source, GoalService goalService, String biomeName)
+    private static int explore(CommandSourceStack source, GoalService goalService, String name)
             throws CommandSyntaxException {
         ServerPlayer player = source.getPlayerOrException();
-        if (!goalService.isValidBiome(player.level(), biomeName)) {
-            source.sendFailure(Component.literal("Invalid biome name: " + biomeName));
+        String report;
+        if (goalService.isValidBiome(player.level(), name)) {
+            report = goalService.explore(player, name);
+        } else if (com.bhautik.mcagent.world.StructureDirectory.isSearchable(name)) {
+            report = goalService.exploreStructure(player, name);
+        } else {
+            source.sendFailure(Component.literal(
+                    "Unknown biome or structure: " + name + " (try desert, jungle, village, "
+                            + "mineshaft, stronghold, shipwreck, ruined_portal, buried_treasure)"));
             return 0;
         }
-        String report = goalService.explore(player, biomeName);
         source.sendSuccess(() -> Component.literal(report), false);
         return 1;
     }
