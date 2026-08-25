@@ -24,6 +24,8 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Map;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
@@ -484,12 +486,29 @@ public final class GoalService {
         }
         if (activeRun.sailTargetPos != null) {
             var waypoint = activeRun.sailTargetPos;
-            McAgent.LOGGER.info("[Planner] Plan generated: [Sail to {} {}]",
-                    waypoint.getX(), waypoint.getZ());
-            return List.of(new com.bhautik.mcagent.action.SailAction(
+            List<AgentAction> actions = new ArrayList<>();
+            var countsNow = InventoryState.collect(player).itemCounts();
+            boolean carryingBoat = countsNow.keySet().stream()
+                    .anyMatch(id -> id.endsWith("_boat"));
+            if (!carryingBoat) {
+                // Self-supply like any other resource: planks, table,
+                // craft - then the crossing.
+                List<AgentAction> boatPlan = executor.planner().planAcquisition(
+                        environmentFor(activeRun, player, countsNow).resolver(),
+                        id -> countsNow.getOrDefault(id, 0),
+                        countsNow.keySet(),
+                        itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                        environmentFor(activeRun, player, countsNow),
+                        "minecraft:oak_boat", 1);
+                actions.addAll(boatPlan);
+            }
+            McAgent.LOGGER.info("[Planner] Plan generated: [{} Sail to {} {}]",
+                    carryingBoat ? "" : "Craft boat, ", waypoint.getX(), waypoint.getZ());
+            actions.add(new com.bhautik.mcagent.action.SailAction(
                     waypoint.getX(), waypoint.getZ(), Math.sqrt(SAIL_ARRIVE_DISTANCE_SQ),
                     () -> activeRun.sailDistance.getAsDouble(),
                     com.bhautik.mcagent.integration.VanillaSailor.forPlayer(player)));
+            return actions;
         }
         if (activeRun.structureTargetPos != null) {
             // M9 structures: walk to the located position; arrival is
@@ -507,31 +526,7 @@ public final class GoalService {
         activeRun.snapshot.setCount(activeRun.item, current);
         try {
             var countsNow = InventoryState.collect(player).itemCounts();
-            var environment = new com.bhautik.mcagent.planner.Planner.Environment(
-                    VanillaCraftingExecutor.forPlayer(player, activeRun.server),
-                    com.bhautik.mcagent.crafting.VanillaSmelter.forPlayer(player,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.breaker(player,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    new VanillaRecipeResolver(activeRun.server,
-                            com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
-                    new com.bhautik.mcagent.crafting.VanillaSmeltingResolver(activeRun.server),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
-                            com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
-                            com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
-                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    (x, y, z) -> player.distanceToSqr(x, y, z),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
-                            com.bhautik.mcagent.planner.Planner.TORCH_ITEM),
-                    () -> player.level().getBiome(player.blockPosition()).unwrapKey()
-                            .map(key -> key.identifier().toString()).orElse(""),
-                    new com.bhautik.mcagent.world.PositionAnchor() {
-                        @Override public int x() { return player.blockPosition().getX(); }
-                        @Override public int z() { return player.blockPosition().getZ(); }
-                    });
+            var environment = environmentFor(activeRun, player, countsNow);
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
@@ -565,6 +560,37 @@ public final class GoalService {
             activeRun.goal.markFailed(planningFailure.getMessage());
             return List.of();
         }
+    }
+
+    /** Builds the full execution seam bundle against live world state. */
+    private com.bhautik.mcagent.planner.Planner.Environment environmentFor(
+            ActiveRun activeRun, ServerPlayer player,
+            Map<String, Integer> countsNow) {
+        return new com.bhautik.mcagent.planner.Planner.Environment(
+                VanillaCraftingExecutor.forPlayer(player, activeRun.server),
+                com.bhautik.mcagent.crafting.VanillaSmelter.forPlayer(player,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.placer(player),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.breaker(player,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                new VanillaRecipeResolver(activeRun.server,
+                        com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
+                new com.bhautik.mcagent.crafting.VanillaSmeltingResolver(activeRun.server),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                        com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                        com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                (x, y, z) -> player.distanceToSqr(x, y, z),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
+                        com.bhautik.mcagent.planner.Planner.TORCH_ITEM),
+                () -> player.level().getBiome(player.blockPosition()).unwrapKey()
+                        .map(key -> key.identifier().toString()).orElse(""),
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    @Override public int x() { return player.blockPosition().getX(); }
+                    @Override public int z() { return player.blockPosition().getZ(); }
+                });
     }
 
     /**
