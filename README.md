@@ -2,115 +2,29 @@
 
 A Fabric mod foundation for a future autonomous Minecraft AI agent.
 
-## Current milestone
+## Current milestones
 
-Implemented:
+Full per-milestone status, backlog, limitations, scrapped ideas, and the
+design-decision log live in **[docs/PROGRESS.md](docs/PROGRESS.md)**.
+Summary of what works today:
 
-- Fabric/Gradle project structure.
-- Main mod entry point: `com.bhautik.mcagent.McAgent`.
-- `/agent status` command.
-- World-state collection for player health, hunger, position, and dimension.
-- Inventory-state collection with item-count summaries.
-- Goal lifecycle (`IDLE → ACTIVE → SUCCESS / FAILED / CANCELLED`) with
-  `GetItemGoal`, goal manager, and item registry.
-- Action model (`PENDING → RUNNING → SUCCESS / FAILED / CANCELLED`)
-  with `MineAction`, an idle-timeout retry ladder, and safe cancellation.
-- In-game commands: `/agent get <item> <count>`, `/agent goal`,
-  `/agent cancel`.
-- **First execution (M3):** get-item goals are planned into `MineAction`s
-  and executed through the Baritone integration layer, with inventory
-  monitored live every second and verified independently before SUCCESS.
-- **General direct acquisition (M4):** every real vanilla item resolves
-  by name; ~60 directly-mineable/gatherable items have curated source
-  blocks (ores + deepslate, wood family, plants); tool-tier gating fails
-  fast (e.g. diamonds without an iron pickaxe) instead of mining blocks
-  that would drop nothing.
-- **Dependency planning (M5):** goals expand recursively through real
-  vanilla recipes — `/agent get crafting_table 1` mines logs, crafts
-  planks, then crafts the table. Shared dependencies are aggregated,
-  existing inventory is credited first, and inventory-grid (2x2)
-  recipes execute via a server-side `CraftAction` with output
-  verification.
-- **Crafting table (M6):** recipes wider or taller than 2x2 plan
-  acquire-table → place → craft: the agent carries or crafts a
-  `crafting_table`, places it on a verified spot next to itself
-  (`PlaceBlockAction`, block-state verified), and crafts 3x3 recipes
-  against it — `/agent get chest 1` works end-to-end from bare hands,
-  as do `furnace`, `stone_pickaxe`, and other table-gated goods whose
-  ingredients are reachable. Placement is skipped when a table is
-  already within range, one placement is shared per plan, and gated
-  crafts fail honestly if the table disappears mid-run.
-- **Table reuse:** a placed table is remembered by world query, not
-  inventory — if one exists within walking distance (~48 blocks) the
-  planner emits `MoveAction` (Baritone goto) to reach it instead of
-  crafting another; only when none exists nearby does the agent build
-  one. Arrival is verified against live distance (PRD 13). Tables the
-  agent placed itself are collected afterwards (`BreakBlockAction`,
-  verified by cleared block state + returned item); pre-existing
-  tables are left untouched.
-- **Smelting (M7):** furnace recipes route through real furnaces —
-  `/agent get iron_ingot 1` plans mine raw iron, mine coal, place a
-  carried/crafted furnace, load both into the furnace's block entity,
-  and let it cook on real game ticks while the action monitors and
-  harvests output (PRD UC-06: never block the thread). Furnaces are
-  walked to when present, placed when missing, and collected after.
-  This completes the iron ladder: `/agent get iron_pickaxe 1` works
-  end-to-end from bare hands (logs → table → wooden pickaxe → stone →
-  stone pickaxe → iron ore → coal → smelt → iron pickaxe), and
-  `/agent get diamond_pickaxe 1` self-provides its entire prerequisite
-  chain including the iron pickaxe needed to mine diamond ore.
-- **Survival interruptions (M8):** every half second the active run is
-  assessed (health ≤ 4 hearts, hunger ≤ 3, or low oxygen all suspend
-  work). On emergency the current action is *paused* — navigation
-  stopped, state kept — re-queued, and a recovery step jumps the queue:
-  eat the most nutritious food carried, or swim upward when drowning,
-  then resume where it left off. Starving with no food fails the goal
-  honestly after a timeout instead of mining until death; trapped
-  underwater fails instead of silently drowning.
-- **Exploration (M9, biomes):** `/agent explore desert` verifies the
-  current biome first (already there = instant success), then wanders
-  outward through Baritone's explore process until the live biome
-  sensor reports arrival — verified independently, with re-issue on
-  stalls and an honest failure when the budget runs out.
-- **Torch lighting (survival prevention):** mining plans keep a full
-  stack of 64 torches — whenever stock drops below 16, the planner
-  prepends the whole coal + sticks chain before any digging — and
-  every mining step is followed by a best-effort `Light area`
-  action that drops a torch whenever the agent stands below light
-  level 8 — keeping tunnels unspawnable instead of reacting to the
-  mobs afterwards.
-- **Tool ladders:** when a mineable item needs a pickaxe tier the agent
-  doesn't have, the planner folds the cheapest qualifying tool's whole
-  chain into the plan instead of refusing — `/agent get stone_pickaxe 1`
-  from bare hands mines logs, crafts planks/sticks/table, crafts and
-  places the table, crafts the wooden pickaxe, then mines stone and
-  crafts the stone pickaxe. If even that chain is unresolvable (e.g.
-  diamonds needing an iron pickaxe while iron requires smelting), the
-  refusal explains exactly which link failed.
-- **Armor/tool kits (UC-09):** `/agent get diamond_armor 1` expands to
-  all four pieces planned as ONE goal - shared dependencies (the total
-  diamond count) are pooled and gathered once instead of four
-  independent ladders. Kits: iron/diamond armor, iron/diamond tools.
-- **Base camp & storage:** `/agent base here` marks home and places a
-  chest + crafting table there (session-persistent). `/agent stash
-  cobblestone all`, `/agent stash junk all`, or any item/count walks
-  the agent back to the base chest and stores verified stacks. When
-  free slots drop below 3 mid-goal and a base exists, the agent
-  detours automatically - pause, walk home, dump tunnel junk, resume -
-  so target drops never go unpicked for lack of space.
-- **Structure discovery (M9):** `/agent explore village` locates the
-  nearest tagged structure via vanilla world lookup and walks there —
-  arrival verified against live distance. Also searchable: mineshaft,
-  stronghold, shipwreck, ruined_portal, buried_treasure.
-- **Biome-gated gathering:** biome-locked resources chain exploration
-  automatically — `/agent get cactus 8` from a plains start plans
-  `[Explore to desert, Mine cactus]`, skipping the travel step when
-  already standing in the right biome. Gated today: cactus (desert),
-  bamboo (jungle), sweet berries (taiga), red sand (badlands),
-  snowballs (snowy plains).
+- **M1-M5**: foundation, goal lifecycle, mining via Baritone, ~60 curated
+  direct acquisitions with tool-tier gating, recursive dependency planning
+- **M6/M7**: crafting tables (walk-to / carry / place / collect) and
+  smelting through real furnaces - `/agent get diamond_pickaxe 1` from
+  bare hands self-provides everything including the iron pickaxe needed
+  for diamonds
+- **UC-09 kits**: `iron_armor`, `diamond_armor`, `iron_tools`,
+  `diamond_tools` planned as one pooled goal
+- **Survival**: interrupts for health/hunger/oxygen (eat / forage /
+  surface), torch upkeep (full stack) with continuous tunnel lighting
+- **Exploration**: biome travel, structure discovery (village, mineshaft,
+  stronghold, ...), biome-gated resources auto-chain exploration
+- **Base camp**: anchor + chest + table; stash commands and an automatic
+  junk-detour when the bag is nearly full
 
-Not implemented yet: structure discovery, cave exploration, LLM
-integration, or farms.
+Not yet: combat, enchanting, nether/smithing, cave targeting, farms
+(M10/M11), natural language (M12). See PROGRESS.md for the full backlog.
 
 ### Execution backend
 
@@ -124,11 +38,16 @@ swapped for any navigation backend.
 ## Commands
 
 ```text
-/agent status                    show world/inventory snapshot and executor state
-/agent get <item> <count>        register a GetItemGoal and start executing it
-/agent explore <biome>           travel to a biome and verify arrival (UC-08)
-/agent goal                      report the active goal's live progress
-/agent cancel                    cancel the active goal and stop navigation
+/agent status                       world/inventory snapshot + executor state
+/agent get <item> <count>           recursive get-goal (mine/craft/smelt chains)
+/agent get <kit> <count>            kit goal: iron_armor, diamond_armor,
+                                    iron_tools, diamond_tools (UC-09 pooling)
+/agent explore <biome|structure>    travel + verified arrival (desert, village,
+                                    stronghold, mineshaft, shipwreck, ...)
+/agent base here                    set home anchor; place chest + crafting table
+/agent stash <item|junk> [count]    store items at the base chest
+/agent goal                         live goal progress
+/agent cancel                       stop goal + navigation
 ```
 
 Items resolve against the live vanilla registry (`diamond`,
@@ -183,29 +102,31 @@ Once in a world, run:
 
 ```text
 com.bhautik.mcagent
-├── McAgent
-├── command/AgentCommand
-├── action/AgentAction, ActionStatus, MineAction, CraftAction,
-│         PlaceBlockAction
-├── state/WorldState
-├── state/WorldStateCollector
-├── state/InventoryState
-├── world/TableLocator           (is-a-table-in-range seam)
-├── goal/GoalService        (agent brain: plan → execute → verify → recover)
-├── goal/Goal               (planner-facing seam, pre-execution)
-├── planner/Planner              (+ Environment: crafter/placer/locator seams)
-├── executor/AgentExecutor  (single-action tick runner)
-├── crafting/RecipeResolver, VanillaRecipeResolver,
-│            VanillaCraftingExecutor
-├── integration/VanillaPlacementExecutor (placement + table detection)
-├── item/MineableItems      (directly-mineable item → source block map)
-└── integration/BaritoneIntegration (reflective, swap-safe backend)
+├── McAgent                          entry point: command + server-tick wiring
+├── command/AgentCommand             /agent command tree
+├── action/                          MineAction, CraftAction, SmeltAction,
+│                                    MoveAction, ExploreAction, PlaceBlockAction,
+│                                    BreakBlockAction, DepositAction,
+│                                    RecoverAction, SurfaceAction,
+│                                    Equipper, TunnelLighter seams
+├── planner/Planner                  recursive multi-root planning (+Environment)
+├── goal/GoalService                 agent brain: plan -> execute -> verify ->
+│                                    survive -> recover
+├── executor/AgentExecutor           single-action tick runner (+suspension)
+├── survival/SurvivalMonitor, Threat health/hunger/oxygen assessment seam
+├── world/                           BlockLocator, BiomeSensor, DistanceSensor,
+│                                    LightSensor, PositionAnchor, StructureDirectory
+├── state/, item/, crafting/         collectors, registries/kits/acquisitions,
+│                                    recipe+smelting resolvers, craft/smelt executors
+└── integration/                     BaritoneIntegration (reflective mine/goto/
+                                     explore/equip), VanillaPlacementExecutor,
+                                     VanillaSurvivalMonitor, VanillaEquipment,
+                                     VanillaStorage
 
-dev.minecraftai.agent         (framework-free goal lifecycle core)
-├── goal/AgentGoal, GoalStatus, GetItemGoal, AgentGoalManager
-├── item/MinecraftItem, ItemRegistry
-├── world/InventoryState
-└── command/AgentCommandHandler + AgentCli (JVM smoke checks)
+dev.minecraftai.agent                framework-free goal lifecycle core
+├── goal/                            AgentGoal, GetItemGoal, GetKitGoal,
+│                                    ExploreGoal, AgentGoalManager
+├── item/, world/, command/          registry models + CLI smoke-check harness
 ```
 
 Baritone is intentionally isolated behind `BaritoneIntegration`; this project does not embed or modify Baritone or Meteor Client code.
