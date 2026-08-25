@@ -19,10 +19,16 @@ public final class VanillaSurvivalMonitor {
     private VanillaSurvivalMonitor() {
     }
 
+    /** Air supply below this counts as a drowning emergency. */
+    private static final int CRITICAL_AIR = 90;
+
     public static SurvivalMonitor monitor(ServerPlayer player) {
         return () -> {
             float health = player.getHealth();
             int hunger = player.getFoodData().getFoodLevel();
+            if (player.getAirSupply() < CRITICAL_AIR) {
+                return Threat.airEmergency("air critical (" + player.getAirSupply() + ")");
+            }
             if (health <= SurvivalMonitor.CRITICAL_HEALTH) {
                 return Threat.emergency("health critical (" + health + ")");
             }
@@ -30,6 +36,23 @@ public final class VanillaSurvivalMonitor {
                 return Threat.emergency("hunger critical (" + hunger + ")");
             }
             return Threat.NONE;
+        };
+    }
+
+    /**
+     * Drowning response: repeated upward swim impulses. Server-set
+     * velocity only reaches the client player when hurtMarked forces a
+     * motion sync — the same channel knockback uses.
+     */
+    public static com.bhautik.mcagent.action.SurfaceAction.Swimmer swimmer(
+            ServerPlayer player) {
+        return () -> {
+            if (!player.isInWater()) {
+                return false;
+            }
+            player.push(0, 0.35, 0);
+            player.hurtMarked = true;
+            return true;
         };
     }
 

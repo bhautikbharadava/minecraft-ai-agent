@@ -711,6 +711,42 @@ public final class AgentCli {
         assertEquals(starving.status(), ActionStatus.FAILED, "unrecoverable fails on timeout");
         assertContains(String.valueOf(starving.failureReason()), "no edible food");
 
+        // Drowning recovery: keeps swimming until the monitor clears.
+        boolean[] airOk = {false};
+        int[] strokes = {0};
+        com.bhautik.mcagent.action.SurfaceAction surfacing =
+                new com.bhautik.mcagent.action.SurfaceAction(
+                        () -> airOk[0] ? com.bhautik.mcagent.survival.Threat.NONE
+                                : com.bhautik.mcagent.survival.Threat.airEmergency("air critical"),
+                        () -> {
+                            strokes[0]++;
+                            return true;
+                        });
+        surfacing.start();
+        assertEquals(surfacing.status(), ActionStatus.RUNNING, "surfacing starts");
+        for (int i = 0; i < 30 && surfacing.status() == ActionStatus.RUNNING; i++) {
+            if (i == 10) {
+                airOk[0] = true; // head above water
+            }
+            surfacing.tick();
+        }
+        assertEquals(surfacing.status(), ActionStatus.SUCCESS, "surfaces once breathable");
+        if (strokes[0] == 0) {
+            throw new IllegalStateException("surface action must keep swimming");
+        }
+
+        // Trapped underwater: timeout fails honestly.
+        com.bhautik.mcagent.action.SurfaceAction trapped =
+                new com.bhautik.mcagent.action.SurfaceAction(
+                        () -> com.bhautik.mcagent.survival.Threat.airEmergency("air critical"),
+                        () -> false);
+        trapped.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.SurfaceAction.TIMEOUT_TICKS + 1; i++) {
+            trapped.tick();
+        }
+        assertEquals(trapped.status(), ActionStatus.FAILED, "unreachable air fails on timeout");
+        assertContains(String.valueOf(trapped.failureReason()), "reach air");
+
         // Suspension pauses without cancelling: the action comes back
         // re-launchable and the backend was told to stop.
         FakeBackend survivalBackend = new FakeBackend();

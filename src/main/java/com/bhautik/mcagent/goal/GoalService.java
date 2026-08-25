@@ -296,8 +296,12 @@ public final class GoalService {
         if (suspended != null) {
             activeRun.queue.addFirst(suspended);
         }
-        activeRun.queue.addFirst(new RecoverAction(activeRun.survivalMonitor,
-                VanillaSurvivalMonitor.feeder(player)));
+        AgentAction recovery = threat.needsAir()
+                ? new com.bhautik.mcagent.action.SurfaceAction(activeRun.survivalMonitor,
+                        VanillaSurvivalMonitor.swimmer(player))
+                : new RecoverAction(activeRun.survivalMonitor,
+                        VanillaSurvivalMonitor.feeder(player));
+        activeRun.queue.addFirst(recovery);
         activeRun.recovering = true;
         McAgent.LOGGER.warn("[Recovery] Survival interrupt ({}); recovering before resuming",
                 threat.reason());
@@ -320,7 +324,8 @@ public final class GoalService {
             run = null;
             return;
         }
-        if (finished instanceof RecoverAction) {
+        if (finished instanceof RecoverAction
+                || finished instanceof com.bhautik.mcagent.action.SurfaceAction) {
             activeRun.recovering = false;
             if (finished.status() == ActionStatus.SUCCESS) {
                 activeRun.needsEmergencyFood = false;

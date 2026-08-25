@@ -60,12 +60,13 @@ Implemented:
   `/agent get diamond_pickaxe 1` self-provides its entire prerequisite
   chain including the iron pickaxe needed to mine diamond ore.
 - **Survival interruptions (M8):** every half second the active run is
-  assessed (health ≤ 4 hearts or hunger ≤ 3 suspends work). On
-  emergency the current action is *paused* — navigation stopped, state
-  kept — re-queued, and a recovery step jumps the queue: eat the most
-  nutritious food carried, wait out the danger, then resume where it
-  left off. Starving with no food fails the goal honestly after a
-  timeout instead of mining until death.
+  assessed (health ≤ 4 hearts, hunger ≤ 3, or low oxygen all suspend
+  work). On emergency the current action is *paused* — navigation
+  stopped, state kept — re-queued, and a recovery step jumps the queue:
+  eat the most nutritious food carried, or swim upward when drowning,
+  then resume where it left off. Starving with no food fails the goal
+  honestly after a timeout instead of mining until death; trapped
+  underwater fails instead of silently drowning.
 - **Exploration (M9, biomes):** `/agent explore desert` verifies the
   current biome first (already there = instant success), then wanders
   outward through Baritone's explore process until the live biome
