@@ -14,6 +14,8 @@ public final class MineAction implements AgentAction {
     /** Ticks without inventory progress before the backend is re-issued or the action fails. */
     public static final int IDLE_TIMEOUT_TICKS = 600;
     public static final int MAX_ISSUE_ATTEMPTS = 2;
+    /** Place (or refresh) tunnel lighting once per second while digging. */
+    public static final int LIGHT_INTERVAL_TICKS = 20;
 
     private final String title;
     private final String sourceBlockName;
@@ -21,27 +23,37 @@ public final class MineAction implements AgentAction {
     private final IntSupplier liveCount;
     private final BaritoneIntegration backend;
     private final String preferredToolItemId;
+    private final TunnelLighter lighter;
 
     private ActionStatus status = ActionStatus.PENDING;
     private String failureReason;
     private int issuesUsed;
     private boolean equipped;
+    private int ticksSinceStart;
     private int lastCount;
     private int idleTicks;
 
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend) {
-        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend, null);
+        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend, null, null);
     }
 
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend,
                       String preferredToolItemId) {
+        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
+                preferredToolItemId, null);
+    }
+
+    public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
+                      IntSupplier liveCount, BaritoneIntegration backend,
+                      String preferredToolItemId, TunnelLighter lighter) {
         this.sourceBlockName = sourceBlockName;
         this.targetTotal = targetTotal;
         this.liveCount = liveCount;
         this.backend = backend;
         this.preferredToolItemId = preferredToolItemId;
+        this.lighter = lighter;
         this.title = "Mine " + (targetTotal - baselineCount) + " " + sourceBlockName.replaceFirst("^minecraft:", "");
         this.lastCount = baselineCount;
     }
@@ -74,6 +86,12 @@ public final class MineAction implements AgentAction {
     public void tick() {
         if (status != ActionStatus.RUNNING) {
             return;
+        }
+        ticksSinceStart++;
+        // Continuous tunnel lighting while digging (best-effort).
+        if (lighter != null && ticksSinceStart % LIGHT_INTERVAL_TICKS == 0
+                && lighter.tryPlace()) {
+            McAgent.LOGGER.info("[Action] Placed tunnel torch for {}", title);
         }
         int count = Math.max(liveCount.getAsInt(), 0);
         if (count >= targetTotal) {

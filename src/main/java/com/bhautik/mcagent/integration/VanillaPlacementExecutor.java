@@ -82,6 +82,23 @@ public final class VanillaPlacementExecutor {
     }
 
     /**
+     * Continuous tunnel lighting: places a carried torch at the agent's
+     * feet whenever the local light is below spawn-safe levels. Best
+     * effort — failures are invisible to mining progress.
+     */
+    public static com.bhautik.mcagent.action.TunnelLighter tunnelLighter(
+            ServerPlayer player, String torchItemId) {
+        var light = lightSensor(player);
+        var placer = placer(player);
+        return () -> {
+            if (light.level() >= com.bhautik.mcagent.action.TunnelLighter.MIN_LIGHT) {
+                return false;
+            }
+            return placer.place(torchItemId).success();
+        };
+    }
+
+    /**
      * Removes a nearby block the agent itself placed and returns its item
      * straight to inventory; verifies both the cleared state and the
      * granted stack before reporting success.

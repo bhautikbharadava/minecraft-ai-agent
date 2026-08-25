@@ -3,7 +3,6 @@ package com.bhautik.mcagent.planner;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.BreakBlockAction;
 import com.bhautik.mcagent.action.CraftAction;
-import com.bhautik.mcagent.action.LightTorchAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.action.MoveAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
@@ -14,7 +13,7 @@ import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
 import com.bhautik.mcagent.world.BlockLocator;
 import com.bhautik.mcagent.world.DistanceSensor;
-import com.bhautik.mcagent.world.LightSensor;
+import com.bhautik.mcagent.action.TunnelLighter;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -69,8 +68,7 @@ public final class Planner {
     /**
      * Execution seams handed to emitted actions: real grid crafting,
      * real furnace cooking, real block placement and collection, world
-     * checks that verify all of it, live distances for navigation, and
-     * the light level for torch placement.
+     * checks that verify all of it, and continuous tunnel lighting.
      */
     public record Environment(CraftAction.Crafter crafter,
                               SmeltAction.Smelter smelter,
@@ -81,7 +79,7 @@ public final class Planner {
                               BlockLocator tableLocator,
                               BlockLocator furnaceLocator,
                               DistanceSensor distanceSensor,
-                              LightSensor lightSensor) {
+                              TunnelLighter tunnelLighter) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -192,11 +190,8 @@ public final class Planner {
                         .orElse(null);
                 plan.add(new MineAction(sourceBlock, have, have + missing,
                         () -> liveCounts.applyAsInt(itemId), baritoneIntegration,
-                        toolToHold));
-                // Drop a torch right after digging so tunnels stay lit.
-                plan.add(new LightTorchAction(TORCH_ITEM, environment.lightSensor(),
-                        () -> Math.max(liveCounts.applyAsInt(TORCH_ITEM), 0),
-                        environment.placer()));
+                        toolToHold,
+                        environment.tunnelLighter()));
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }

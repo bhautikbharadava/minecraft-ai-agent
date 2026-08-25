@@ -215,9 +215,9 @@ public final class AgentCli {
         List<AgentAction> stickPlan = planner.planAcquisition(resolver,
                 torchStocked(), Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:stick", 8);
-        assertEquals(stickPlan.size(), 4, "stick chain length");
+        assertEquals(stickPlan.size(), 3, "stick chain length");
         assertContains(stickPlan.get(0).title(), "Mine");
-        assertContains(stickPlan.get(2).title(), "oak_planks");
+        assertContains(stickPlan.get(1).title(), "oak_planks");
 
         try {
             planner.planAcquisition(resolver, torchStocked(), Set.of(), id -> 0,
@@ -246,15 +246,15 @@ public final class AgentCli {
         List<AgentAction> chestPlan = planner.planAcquisition(resolver,
                 torchStocked(), Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:chest", 1);
-        assertEquals(chestPlan.size(), 7, "chest chain length");
+        assertEquals(chestPlan.size(), 6, "chest chain length");
         assertContains(chestPlan.get(0).title(), "Mine");
-        assertContains(chestPlan.get(2).title(), "oak_planks");
+        assertContains(chestPlan.get(1).title(), "oak_planks");
         assertContains(chestPlan.get(2).title(), "Craft");
-        assertEquals(chestPlan.get(4).getClass(), PlaceBlockAction.class, "table placement step");
-        assertEquals(((PlaceBlockAction) chestPlan.get(4)).status(), ActionStatus.PENDING,
+        assertEquals(chestPlan.get(3).getClass(), PlaceBlockAction.class, "table placement step");
+        assertEquals(((PlaceBlockAction) chestPlan.get(3)).status(), ActionStatus.PENDING,
                 "placement starts PENDING");
-        assertContains(chestPlan.get(5).title(), "chest");
-        assertEquals(chestPlan.get(6).getClass(),
+        assertContains(chestPlan.get(4).title(), "chest");
+        assertEquals(chestPlan.get(5).getClass(),
                 com.bhautik.mcagent.action.BreakBlockAction.class,
                 "placed tables are collected last");
 
@@ -263,7 +263,7 @@ public final class AgentCli {
         List<AgentAction> nearTablePlan = planner.planAcquisition(resolver,
                 torchStocked(), Set.of(), id -> 0, env(crafter, placer, blockNearby()),
                 "minecraft:chest", 1);
-        assertEquals(nearTablePlan.size(), 4, "near-table chain length");
+        assertEquals(nearTablePlan.size(), 3, "near-table chain length");
         if (nearTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)
                 || nearTablePlan.stream()
                         .anyMatch(action -> action instanceof com.bhautik.mcagent.action.BreakBlockAction)) {
@@ -275,12 +275,12 @@ public final class AgentCli {
         List<AgentAction> farTablePlan = planner.planAcquisition(resolver,
                 torchStocked(), Set.of(), id -> 0, env(crafter, placer, blockFarAway()),
                 "minecraft:chest", 1);
-        assertEquals(farTablePlan.size(), 5, "far-table chain length");
+        assertEquals(farTablePlan.size(), 4, "far-table chain length");
         assertContains(farTablePlan.get(0).title(), "Mine");
-        assertContains(farTablePlan.get(2).title(), "oak_planks");
-        assertEquals(farTablePlan.get(3).getClass(), com.bhautik.mcagent.action.MoveAction.class,
+        assertContains(farTablePlan.get(1).title(), "oak_planks");
+        assertEquals(farTablePlan.get(2).getClass(), com.bhautik.mcagent.action.MoveAction.class,
                 "walks to the existing table");
-        assertContains(farTablePlan.get(4).title(), "chest");
+        assertContains(farTablePlan.get(3).title(), "chest");
         if (farTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)
                 || farTablePlan.stream()
                         .anyMatch(action -> action instanceof com.bhautik.mcagent.action.BreakBlockAction)) {
@@ -303,9 +303,9 @@ public final class AgentCli {
         List<AgentAction> carriedPlan = planner.planAcquisition(resolver,
                 id -> carryingTable.getOrDefault(id, 0), Set.of(), id -> 0,
                 env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:chest", 1);
-        assertEquals(carriedPlan.size(), 6, "carried-table chain length");
-        assertEquals(carriedPlan.get(3).getClass(), PlaceBlockAction.class, "still places carried table");
-        assertEquals(carriedPlan.get(5).getClass(),
+        assertEquals(carriedPlan.size(), 5, "carried-table chain length");
+        assertEquals(carriedPlan.get(2).getClass(), PlaceBlockAction.class, "still places carried table");
+        assertEquals(carriedPlan.get(4).getClass(),
                 com.bhautik.mcagent.action.BreakBlockAction.class,
                 "carried table comes home too");
 
@@ -323,16 +323,16 @@ public final class AgentCli {
         List<AgentAction> cobblePlan = planner.planAcquisition(resolver,
                 torchStocked(), Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:cobblestone", 3);
-        if (cobblePlan.size() != 10) {
-            throw new IllegalStateException("tool-first chain length: expected [10] got ["
+        if (cobblePlan.size() != 8) {
+            throw new IllegalStateException("tool-first chain length: expected [8] got ["
                     + cobblePlan.size() + "] " + cobblePlan.stream()
                             .map(AgentAction::title).toList());
         }
         assertContains(cobblePlan.get(0).title(), "Mine");
-        assertContains(cobblePlan.get(6).title(), "wooden_pickaxe");
-        assertEquals(cobblePlan.get(7).getClass(), MineAction.class,
+        assertContains(cobblePlan.get(5).title(), "wooden_pickaxe");
+        assertEquals(cobblePlan.get(6).getClass(), MineAction.class,
                 "mining comes after the tool is crafted");
-        assertEquals(cobblePlan.get(9).getClass(),
+        assertEquals(cobblePlan.get(7).getClass(),
                 com.bhautik.mcagent.action.BreakBlockAction.class,
                 "tool chain collects its table last");
         placements = cobblePlan.stream()
@@ -377,23 +377,23 @@ public final class AgentCli {
                 env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
                         output -> Optional.ofNullable(smelting.get(output))),
                 "minecraft:iron_ingot", 1);
-        if (ingotPlan.size() != 7) {
-            throw new IllegalStateException("smelt chain length: expected [7] got ["
+        if (ingotPlan.size() != 5) {
+            throw new IllegalStateException("smelt chain length: expected [5] got ["
                     + ingotPlan.size() + "] " + ingotPlan.stream()
                             .map(AgentAction::title).toList());
         }
         // Gathering happens before placement so Baritone never mines
         // through the freshly placed furnace.
         assertContains(ingotPlan.get(0).title(), "iron_ore");
-        assertContains(ingotPlan.get(2).title(), "coal");
-        assertEquals(ingotPlan.get(4).getClass(), PlaceBlockAction.class,
+        assertContains(ingotPlan.get(1).title(), "coal");
+        assertEquals(ingotPlan.get(2).getClass(), PlaceBlockAction.class,
                 "furnace placed only after mining");
-        assertEquals(ingotPlan.get(5).getClass(),
+        assertEquals(ingotPlan.get(3).getClass(),
                 com.bhautik.mcagent.action.SmeltAction.class, "cook step");
-        assertEquals(ingotPlan.get(6).getClass(),
+        assertEquals(ingotPlan.get(4).getClass(),
                 com.bhautik.mcagent.action.BreakBlockAction.class,
                 "furnace collected last");
-        assertContains(ingotPlan.get(6).title(), "furnace");
+        assertContains(ingotPlan.get(4).title(), "furnace");
 
         // The iron route still refuses honestly when the furnace path is
         // missing and only the nugget loop exists.
@@ -516,60 +516,28 @@ public final class AgentCli {
             throw new IllegalStateException("expected torches crafted before goal mining, got "
                     + unlitPlan.stream().map(AgentAction::title).toList());
         }
-        // Light steps follow every mine in the unlit plan.
-        long lightSteps = unlitPlan.stream()
-                .filter(step -> step instanceof com.bhautik.mcagent.action.LightTorchAction)
-                .count();
-        if (lightSteps < 2) {
-            throw new IllegalStateException("expected light steps after mines, got "
-                    + unlitPlan.stream().map(AgentAction::title).toList());
+
+        // Tunnel lighting rides inside MineAction: the lighter is polled
+        // every second while digging and placements are best-effort.
+        int[] lightTicks = {0};
+        com.bhautik.mcagent.action.TunnelLighter countingLighter = () -> {
+            lightTicks[0]++;
+            return true;
+        };
+        FakeBackend litBackend = new FakeBackend();
+        int[] slowOre = {0};
+        MineAction litMine = new MineAction("minecraft:diamond_ore", 0, 2, () -> slowOre[0],
+                litBackend, null, countingLighter);
+        litMine.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.MineAction.LIGHT_INTERVAL_TICKS; i++) {
+            litMine.tick();
+            if (litMine.status() == ActionStatus.SUCCESS) {
+                break;
+            }
         }
-
-        // LightTorchAction: bright or torchless runs are no-ops; dark with
-        // torches places once; failures stay best-effort.
-        int[] brightness = {15};
-        int[] torchCount = {1};
-        int[] torchPlacements = {0};
-        com.bhautik.mcagent.action.LightTorchAction bright =
-                new com.bhautik.mcagent.action.LightTorchAction(
-                        "minecraft:torch", () -> brightness[0], () -> torchCount[0],
-                        itemId -> {
-                            torchPlacements[0]++;
-                            return PlaceBlockAction.Placer.Result.ok();
-                        });
-        bright.start();
-        bright.tick();
-        assertEquals(bright.status(), ActionStatus.SUCCESS, "bright areas skip lighting");
-        assertEquals(torchPlacements[0], 0, "no torch consumed in the light");
-
-        brightness[0] = 3;
-        torchCount[0] = 0;
-        com.bhautik.mcagent.action.LightTorchAction torchless =
-                new com.bhautik.mcagent.action.LightTorchAction(
-                        "minecraft:torch", () -> brightness[0], () -> torchCount[0],
-                        itemId -> {
-                            torchPlacements[0]++;
-                            return PlaceBlockAction.Placer.Result.ok();
-                        });
-        torchless.start();
-        torchless.tick();
-        assertEquals(torchless.status(), ActionStatus.SUCCESS, "torchless runs skip too");
-        assertEquals(torchPlacements[0], 0, "nothing placed without torches");
-
-        brightness[0] = 3;
-        torchCount[0] = 4;
-        com.bhautik.mcagent.action.LightTorchAction lit =
-                new com.bhautik.mcagent.action.LightTorchAction(
-                        "minecraft:torch", () -> brightness[0], () -> torchCount[0],
-                        itemId -> {
-                            torchPlacements[0]++;
-                            return PlaceBlockAction.Placer.Result.ok();
-                        });
-        lit.start();
-        lit.tick();
-        assertEquals(lit.status(), ActionStatus.SUCCESS, "dark + carried torch lights up");
-        assertEquals(torchPlacements[0], 1, "exactly one torch placed");
-        assertEquals(lit.bestEffort(), true, "lighting is best-effort");
+        if (lightTicks[0] == 0) {
+            throw new IllegalStateException("mining must poll the tunnel lighter");
+        }
     }
 
     /** Builds a planner environment around a given world-block state. */
@@ -597,7 +565,7 @@ public final class AgentCli {
                 },
                 smelting,
                 locator, locator, (x, y, z) -> 100.0,
-                com.bhautik.mcagent.world.LightSensor.BRIGHT);
+                () -> false);
     }
 
     /** A smelter that always reports success. */

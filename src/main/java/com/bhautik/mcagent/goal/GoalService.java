@@ -390,7 +390,8 @@ public final class GoalService {
                             com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
                             com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                     (x, y, z) -> player.distanceToSqr(x, y, z),
-                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.lightSensor(player));
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
+                            com.bhautik.mcagent.planner.Planner.TORCH_ITEM));
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
