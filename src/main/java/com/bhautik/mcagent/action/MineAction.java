@@ -24,6 +24,8 @@ public final class MineAction implements AgentAction {
     private final BaritoneIntegration backend;
     private final String preferredToolItemId;
     private final TunnelLighter lighter;
+    private final Equipper equipper;
+    private final com.bhautik.mcagent.world.PositionAnchor anchor;
 
     private ActionStatus status = ActionStatus.PENDING;
     private String failureReason;
@@ -32,29 +34,45 @@ public final class MineAction implements AgentAction {
     private int ticksSinceStart;
     private int lastCount;
     private int idleTicks;
+    private int lastAnchorX = Integer.MIN_VALUE;
+    private int lastAnchorZ = Integer.MIN_VALUE;
+    private int lastAnchorY = Integer.MIN_VALUE;
 
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend) {
-        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend, null, null);
+        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
+                null, null, null, null);
+    }
+
+    public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
+                      IntSupplier liveCount, BaritoneIntegration backend,
+                      String preferredToolItemId, TunnelLighter lighter) {
+        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
+                preferredToolItemId, lighter, null, null);
     }
 
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend,
                       String preferredToolItemId) {
         this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
-                preferredToolItemId, null);
+                preferredToolItemId, null, null, null);
     }
 
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend,
-                      String preferredToolItemId, TunnelLighter lighter) {
+                      String preferredToolItemId, TunnelLighter lighter,
+                      com.bhautik.mcagent.world.PositionAnchor anchor,
+                      Equipper equipper) {
         this.sourceBlockName = sourceBlockName;
         this.targetTotal = targetTotal;
         this.liveCount = liveCount;
         this.backend = backend;
         this.preferredToolItemId = preferredToolItemId;
         this.lighter = lighter;
-        this.title = "Mine " + (targetTotal - baselineCount) + " " + sourceBlockName.replaceFirst("^minecraft:", "");
+        this.equipper = equipper;
+        this.anchor = anchor;
+        this.title = "Mine " + (targetTotal - baselineCount) + " "
+                + sourceBlockName.replaceFirst("^minecraft:", "");
         this.lastCount = baselineCount;
     }
 
@@ -100,6 +118,12 @@ public final class MineAction implements AgentAction {
             McAgent.LOGGER.info("[Action] Verified success: {} (inventory {})", title, count);
             return;
         }
+        // Traveling toward the target IS progress: searching far veins
+        // legitimately takes minutes, and restarting Baritone mid-scan
+        // only resets the block being broken.
+        if (anchor != null && anchorMoved(anchor)) {
+            idleTicks = 0;
+        }
         if (count > lastCount) {
             lastCount = count;
             idleTicks = 0;
@@ -140,8 +164,8 @@ public final class MineAction implements AgentAction {
             return;
         }
         McAgent.LOGGER.info("[Action] Started: {}", title);
-        if (preferredToolItemId != null && !equipped) {
-            equipped = backend.equip(preferredToolItemId);
+        if (preferredToolItemId != null && equipper != null && !equipped) {
+            equipped = equipper.equip(preferredToolItemId);
             if (!equipped) {
                 // Best-effort: mining proceeds, but wrong-tier breaks may
                 // drop nothing and the idle timeout will surface it honestly.
@@ -152,6 +176,21 @@ public final class MineAction implements AgentAction {
         if (!backend.startMine(sourceBlockName, missing)) {
             fail("no navigation backend available: " + backend.describe());
         }
+    }
+
+
+    private boolean anchorMoved(com.bhautik.mcagent.world.PositionAnchor anchor) {
+        int ax = anchor.x();
+        int az = anchor.z();
+        int ay = anchor.y();
+        boolean moved = lastAnchorX != Integer.MIN_VALUE
+                && (ax != lastAnchorX || az != lastAnchorZ
+                    || (ay != Integer.MIN_VALUE && lastAnchorY != Integer.MIN_VALUE
+                        && ay != lastAnchorY));
+        lastAnchorX = ax;
+        lastAnchorZ = az;
+        lastAnchorY = ay;
+        return moved;
     }
 
     private void fail(String reason) {

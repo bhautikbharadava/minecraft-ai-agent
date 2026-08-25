@@ -567,7 +567,8 @@ public final class GoalService {
                 new com.bhautik.mcagent.world.PositionAnchor() {
                     @Override public int x() { return player.blockPosition().getX(); }
                     @Override public int z() { return player.blockPosition().getZ(); }
-                });
+                },
+                com.bhautik.mcagent.integration.VanillaEquipment.equipper(player));
     }
 
     /**

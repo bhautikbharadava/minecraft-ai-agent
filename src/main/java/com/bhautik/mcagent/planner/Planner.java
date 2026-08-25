@@ -3,6 +3,7 @@ package com.bhautik.mcagent.planner;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.BreakBlockAction;
 import com.bhautik.mcagent.action.CraftAction;
+import com.bhautik.mcagent.action.Equipper;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.action.MoveAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
@@ -84,7 +85,8 @@ public final class Planner {
                               DistanceSensor distanceSensor,
                               TunnelLighter tunnelLighter,
                               BiomeSensor biomeSensor,
-                              PositionAnchor anchor) {
+                              PositionAnchor anchor,
+                              Equipper equipper) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -222,7 +224,9 @@ public final class Planner {
                 plan.add(new MineAction(sourceBlock, have, have + missing,
                         () -> liveCounts.applyAsInt(itemId), baritoneIntegration,
                         toolToHold,
-                        environment.tunnelLighter()));
+                        environment.tunnelLighter(),
+                        environment.anchor(),
+                        environment.equipper()));
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }

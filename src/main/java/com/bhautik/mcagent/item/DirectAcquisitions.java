@@ -168,6 +168,34 @@ public final class DirectAcquisitions {
         return Optional.ofNullable(BIOME_GATES.get(itemId));
     }
 
+
+    /**
+     * True when {@code heldId} is a pickaxe of at least the tier of
+     * {@code wantedId} - meaning there is nothing to gain from
+     * switching, so automation should leave the held tool alone and let
+     * vanilla/Baritone auto-tool handle per-block selection without
+     * churn.
+     */
+    public static boolean pickaxeTierAtLeast(String heldId, String wantedId) {
+        ToolTier held = pickaxeTier(heldId);
+        ToolTier wanted = pickaxeTier(wantedId);
+        return held != null && wanted != null && held.ordinal() >= wanted.ordinal();
+    }
+
+    private static ToolTier pickaxeTier(String itemId) {
+        if (itemId == null || !itemId.endsWith("_pickaxe")) {
+            return null;
+        }
+        return switch (itemId.replaceFirst("^minecraft:", "")) {
+            case "wooden_pickaxe", "golden_pickaxe" -> ToolTier.WOOD;
+            case "stone_pickaxe" -> ToolTier.STONE;
+            case "iron_pickaxe" -> ToolTier.IRON;
+            case "diamond_pickaxe" -> ToolTier.DIAMOND;
+            case "netherite_pickaxe" -> ToolTier.DIAMOND;
+            default -> null;
+        };
+    }
+
     /** Exposed for JVM smoke checks. */
     public static Map<String, String> all() {
         return ACQUISITIONS.entrySet().stream()

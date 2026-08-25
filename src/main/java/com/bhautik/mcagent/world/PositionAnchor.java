@@ -8,4 +8,9 @@ public interface PositionAnchor {
     int x();
 
     int z();
+
+    /** Vertical position when the implementation tracks it. */
+    default int y() {
+        return Integer.MIN_VALUE;
+    }
 }

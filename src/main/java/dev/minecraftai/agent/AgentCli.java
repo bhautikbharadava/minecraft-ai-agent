@@ -125,9 +125,16 @@ public final class AgentCli {
         assertEquals(gatedMine.status(), ActionStatus.SUCCESS, "satisfied before start still works");
         assertEquals(equipping.lastEquipped, null, "no equip when already satisfied");
         int[] diamonds = {0};
-        MineAction gatedMineLive = new MineAction("minecraft:diamond_ore", 0, 3, () -> diamonds[0],
-                equipping, "minecraft:iron_pickaxe");
+        int[] equipCalls = {0};
+        MineAction gatedMineLive = new MineAction("minecraft:diamond_ore", 0, 3,
+                () -> diamonds[0], equipping, "minecraft:iron_pickaxe", null, null,
+                itemId -> {
+                    equipCalls[0]++;
+                    equipping.lastEquipped = itemId;
+                    return true;
+                });
         gatedMineLive.start();
+        assertEquals(equipCalls[0], 1, "equips exactly once before issuing mining");
         assertEquals(equipping.lastEquipped, "minecraft:iron_pickaxe",
                 "equips the qualifying pickaxe before issuing mining");
     }
@@ -643,6 +650,46 @@ public final class AgentCli {
                 "minecraft:cactus", 4);
         assertEquals(localCactusPlan.get(0).getClass(), MineAction.class,
                 "already-in-biome digs immediately");
+
+        // Traveling counts as mining progress: a long search must not
+        // restart Baritone every 30s (that resets the break in progress).
+        com.bhautik.mcagent.world.PositionAnchor wanderAnchor =
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    int step;
+                    @Override public int x() { return ++step * 10; }
+                    @Override public int z() { return 0; }
+                };
+        FakeBackend travelBackend = new FakeBackend();
+        int[] equips = {0};
+        MineAction traveler = new MineAction("minecraft:iron_ore", 0, 5, () -> 0,
+                travelBackend, "minecraft:diamond_pickaxe", null, wanderAnchor,
+                itemId -> {
+                    equips[0]++;
+                    return true;
+                });
+        traveler.start();
+        for (int i = 0; i <= MineAction.IDLE_TIMEOUT_TICKS; i++) {
+            traveler.tick();
+        }
+        assertEquals(travelBackend.mineCalls, 1,
+                "moving agent keeps its mining request alive");
+        assertEquals(equips[0], 1, "equip happens once per action");
+
+        // Tool churn guard: a sufficient held pickaxe tier means no swap.
+        if (!DirectAcquisitions.pickaxeTierAtLeast(
+                "minecraft:stone_pickaxe", "minecraft:wooden_pickaxe")) {
+            throw new IllegalStateException("stone must satisfy wood tier");
+        }
+        if (DirectAcquisitions.pickaxeTierAtLeast(
+                "minecraft:wooden_pickaxe", "minecraft:iron_pickaxe")) {
+            throw new IllegalStateException("wood must not satisfy iron tier");
+        }
+        if (DirectAcquisitions.pickaxeTierAtLeast(null, "minecraft:iron_pickaxe")
+                || DirectAcquisitions.pickaxeTierAtLeast("minecraft:bread",
+                        "minecraft:iron_pickaxe")) {
+            throw new IllegalStateException("non-pickaxes have no tier");
+        }
+
     }
 
     /** Builds a planner environment around a given world-block state. */
@@ -685,7 +732,8 @@ public final class AgentCli {
                 new com.bhautik.mcagent.world.PositionAnchor() {
                     @Override public int x() { return anchorX; }
                     @Override public int z() { return anchorZ; }
-                });
+                },
+                itemId -> true);
     }
 
     /** A smelter that always reports success. */
@@ -921,6 +969,7 @@ public final class AgentCli {
 
     private static final class FakeBackend implements BaritoneIntegration {
         String lastEquipped;
+        int mineCalls;
 
         @Override
         public boolean available() {
@@ -929,6 +978,7 @@ public final class AgentCli {
 
         @Override
         public boolean startMine(String blockName, int quantity) {
+            mineCalls++;
             return true;
         }
 
@@ -942,12 +992,6 @@ public final class AgentCli {
         @Override
         public boolean startExplore(int centerX, int centerZ) {
             exploreCalls++;
-            return true;
-        }
-
-        @Override
-        public boolean equip(String itemId) {
-            lastEquipped = itemId;
             return true;
         }
 
