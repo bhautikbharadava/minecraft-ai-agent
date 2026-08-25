@@ -24,7 +24,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Map;
 import java.util.Deque;
 import java.util.List;
@@ -44,8 +43,6 @@ public final class GoalService {
     private static final int STRUCTURE_SEARCH_RADIUS_CHUNKS = 16;
     /** Within this distance (squared) of a located structure, we are there. */
     private static final double STRUCTURE_ARRIVE_DISTANCE_SQ = 48.0 * 48.0;
-    /** Within this distance (squared) of the waypoint, the boat trip is done. */
-    private static final double SAIL_ARRIVE_DISTANCE_SQ = 5.0 * 5.0;
     /** Gatherable foods the agent plans for itself when starving. */
     private static final List<String> EMERGENCY_FOODS = List.of(
             "minecraft:sweet_berries", "minecraft:brown_mushroom",
@@ -242,46 +239,6 @@ public final class GoalService {
         }
     }
 
-    /** M9: sail across water toward absolute coordinates (needs a boat + water). */
-    public String sail(ServerPlayer player, int targetX, int targetZ) {
-        synchronized (monitor) {
-            if (goalManager.activeGoal().isPresent()) {
-                return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
-            }
-            if (!player.isInWater()) {
-                return "Walk into water first - sailing starts from afloat.";
-            }
-            net.minecraft.core.BlockPos waypoint =
-                    net.minecraft.core.BlockPos.containing(targetX, player.getY(), targetZ);
-            java.util.function.DoubleSupplier distance = () ->
-                    player.distanceToSqr(waypoint.getX(), waypoint.getY(), waypoint.getZ());
-            ExploreGoal goal = new ExploreGoal(
-                    "sail " + targetX + " " + targetZ,
-                    () -> distance.getAsDouble() <= SAIL_ARRIVE_DISTANCE_SQ);
-            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
-            goalManager.register(goal);
-            ActiveRun activeRun = new ActiveRun(goal, null, player.getUUID(), 0,
-                    snapshot(player), player.level().getServer(),
-                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
-            activeRun.sailTargetPos = waypoint;
-            activeRun.sailDistance = distance;
-            run = activeRun;
-            if (!replan(run)) {
-                return finishWithFailure(run);
-            }
-            var started = executor.pollFinished();
-            if (started.isPresent()) {
-                ActiveRun failedRun = run;
-                run = null;
-                failedRun.goal.markFailed(started.get().failureReason());
-                return failedRun.goal.progressReport();
-            }
-            return goal.progressReport() + System.lineSeparator()
-                    + "Sailing toward " + targetX + " " + targetZ
-                    + ". Use /agent cancel to stop and dismount.";
-        }
-    }
-
     public String cancelActiveGoal() {
         synchronized (monitor) {
             if (run != null) {
@@ -437,9 +394,6 @@ public final class GoalService {
             return activeRun.structureDistance.getAsDouble()
                     <= STRUCTURE_ARRIVE_DISTANCE_SQ;
         }
-        if (activeRun.sailTargetPos != null && activeRun.sailDistance != null) {
-            return activeRun.sailDistance.getAsDouble() <= SAIL_ARRIVE_DISTANCE_SQ;
-        }
         return current >= activeRun.requested;
     }
 
@@ -483,32 +437,6 @@ public final class GoalService {
             return List.of(new com.bhautik.mcagent.action.ExploreAction(
                     activeRun.exploreTargetBiome, center.getX(), center.getZ(),
                     activeRun.biomeAt::current, executor.baritoneIntegration()));
-        }
-        if (activeRun.sailTargetPos != null) {
-            var waypoint = activeRun.sailTargetPos;
-            List<AgentAction> actions = new ArrayList<>();
-            var countsNow = InventoryState.collect(player).itemCounts();
-            boolean carryingBoat = countsNow.keySet().stream()
-                    .anyMatch(id -> id.endsWith("_boat"));
-            if (!carryingBoat) {
-                // Self-supply like any other resource: planks, table,
-                // craft - then the crossing.
-                List<AgentAction> boatPlan = executor.planner().planAcquisition(
-                        environmentFor(activeRun, player, countsNow).resolver(),
-                        id -> countsNow.getOrDefault(id, 0),
-                        countsNow.keySet(),
-                        itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
-                        environmentFor(activeRun, player, countsNow),
-                        "minecraft:oak_boat", 1);
-                actions.addAll(boatPlan);
-            }
-            McAgent.LOGGER.info("[Planner] Plan generated: [{} Sail to {} {}]",
-                    carryingBoat ? "" : "Craft boat, ", waypoint.getX(), waypoint.getZ());
-            actions.add(new com.bhautik.mcagent.action.SailAction(
-                    waypoint.getX(), waypoint.getZ(), Math.sqrt(SAIL_ARRIVE_DISTANCE_SQ),
-                    () -> activeRun.sailDistance.getAsDouble(),
-                    com.bhautik.mcagent.integration.VanillaSailor.forPlayer(player)));
-            return actions;
         }
         if (activeRun.structureTargetPos != null) {
             // M9 structures: walk to the located position; arrival is
@@ -702,10 +630,6 @@ public final class GoalService {
         com.bhautik.mcagent.world.BiomeSensor biomeAt;
         /** Non-null for structure runs (M9): the located block position. */
         net.minecraft.core.BlockPos structureTargetPos;
-        /** Non-null for sailing runs: the water waypoint. */
-        net.minecraft.core.BlockPos sailTargetPos;
-        /** Live distance to the sail waypoint. */
-        java.util.function.DoubleSupplier sailDistance;
         /** Live distance to the structure target, wired with biomeAt. */
         java.util.function.DoubleSupplier structureDistance;
 
