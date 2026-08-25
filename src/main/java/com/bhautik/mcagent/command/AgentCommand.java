@@ -80,8 +80,9 @@ public final class AgentCommand {
 
     private static int getItem(CommandSourceStack source, GoalService goalService, String itemName, int count)
             throws CommandSyntaxException {
-        if (!goalService.isValidItem(itemName)) {
-            source.sendFailure(Component.literal("Invalid item name: " + itemName));
+        if (!goalService.isValidItem(itemName) && !com.bhautik.mcagent.item.Kits.isKit(itemName)) {
+            source.sendFailure(Component.literal("Invalid item name: " + itemName
+                    + " (kits: " + com.bhautik.mcagent.item.Kits.names() + ")"));
             return 0;
         }
         ServerPlayer player = source.getPlayerOrException();
