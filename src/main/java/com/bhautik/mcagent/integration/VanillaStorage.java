@@ -16,6 +16,9 @@ import net.minecraft.world.level.block.entity.RandomizableContainerBlockEntity;
  */
 public final class VanillaStorage {
 
+    /** Hotbar + main rows the agent uses for loot. */
+    public static final int MAIN_INVENTORY_SIZE = 36;
+
     private VanillaStorage() {
     }
 

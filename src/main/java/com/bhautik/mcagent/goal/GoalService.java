@@ -41,6 +41,8 @@ public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
     private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
+    /** Free hotbag slots below which the agent pauses to stash junk. */
+    private static final int FREE_SLOT_THRESHOLD = 3;
     /** Items auto-stashed when dumping junk at the base chest. */
     private static final List<String> JUNK_ITEMS = List.of(
             "minecraft:cobblestone", "minecraft:dirt", "minecraft:granite",
@@ -393,6 +395,9 @@ public final class GoalService {
             run.tickCount++;
             if (run.tickCount % SURVIVAL_CHECK_INTERVAL_TICKS == 0) {
                 handleSurvival(run, player);
+                if (run != null) {
+                    handleInventoryPressure(run, player);
+                }
             }
             if (run == null) {
                 return;
@@ -405,6 +410,64 @@ public final class GoalService {
 
             executor.pollFinished().ifPresent(finished -> handleFinishedAction(player, finished));
         }
+    }
+
+    /**
+     * A nearly-full bag starves the goal: target drops never get picked
+     * up. When the base chest exists, detour once - pause, walk home,
+     * dump the junk list, resume. Without a base the run keeps going
+     * and the eventual stall explains itself honestly.
+     */
+    private void handleInventoryPressure(ActiveRun activeRun, ServerPlayer player) {
+        if (activeRun.stashing || activeRun.recovering || activeRun.securingFood
+                || activeRun.exploreTargetBiome != null || activeRun.stashIds != null
+                || baseChestPos == null) {
+            return;
+        }
+        var inventory = player.getInventory();
+        int free = 0;
+        for (int slot = 0; slot < com.bhautik.mcagent.integration.VanillaStorage
+                .MAIN_INVENTORY_SIZE; slot++) {
+            if (inventory.getItem(slot).isEmpty()) {
+                free++;
+            }
+        }
+        if (free > FREE_SLOT_THRESHOLD) {
+            return;
+        }
+        McAgent.LOGGER.warn("[Recovery] Inventory almost full ({} free); stashing junk at base",
+                free);
+        AgentAction suspended = executor.suspendCurrent("inventory almost full");
+        if (suspended != null) {
+            activeRun.queue.addFirst(suspended);
+        }
+        // Front-insert in reverse so travel lands before the deposit.
+        java.util.List<AgentAction> detour = stashJunkDetour(activeRun, player);
+        for (int i = detour.size() - 1; i >= 0; i--) {
+            activeRun.queue.addFirst(detour.get(i));
+        }
+        activeRun.stashing = true;
+        launchNextAction();
+    }
+
+    /** Walk-to-base (when far) plus a junk-list deposit step. */
+    private java.util.List<AgentAction> stashJunkDetour(ActiveRun activeRun,
+                                                        ServerPlayer player) {
+        var chest = baseChestPos;
+        java.util.List<AgentAction> detour = new ArrayList<>();
+        java.util.function.DoubleSupplier distance = () ->
+                player.distanceToSqr(chest.getX(), chest.getY(), chest.getZ());
+        if (player.blockPosition().distSqr(chest) > 16.0) {
+            detour.add(new com.bhautik.mcagent.action.MoveAction("base chest",
+                    chest.getX(), chest.getY(), chest.getZ(),
+                    4.0 * 4.0, distance::getAsDouble,
+                    executor.baritoneIntegration()));
+        }
+        detour.add(new com.bhautik.mcagent.action.DepositAction(
+                "Auto-stash junk", JUNK_ITEMS,
+                com.bhautik.mcagent.integration.VanillaStorage.depositor(player,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS)));
+        return detour;
     }
 
     /**
@@ -453,12 +516,14 @@ public final class GoalService {
             return;
         }
         if (finished instanceof RecoverAction
+                || finished instanceof com.bhautik.mcagent.action.DepositAction
                 || finished instanceof com.bhautik.mcagent.action.SurfaceAction) {
             activeRun.recovering = false;
             if (finished.status() == ActionStatus.SUCCESS) {
                 activeRun.needsEmergencyFood = false;
                 activeRun.securingFood = false;
             }
+            activeRun.stashing = false;
             McAgent.LOGGER.info("[Recovery] Survival step finished ({}); resuming plan",
                     finished.status().toString().toLowerCase());
         }
@@ -815,6 +880,8 @@ public final class GoalService {
 
         /** Non-null for stash runs: the ids allowed into the chest. */
         List<String> stashIds;
+        /** True while an auto-stash detour is in the pipeline. */
+        boolean stashing;
 
         ActiveRun(AgentGoal goal, MinecraftItem item, UUID playerId, int requested,
                   dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,

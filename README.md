@@ -94,8 +94,10 @@ Implemented:
 - **Base camp & storage:** `/agent base here` marks home and places a
   chest + crafting table there (session-persistent). `/agent stash
   cobblestone all`, `/agent stash junk all`, or any item/count walks
-  the agent back to the base chest and stores verified stacks -
-  keeping long mining runs from drowning in cobblestone.
+  the agent back to the base chest and stores verified stacks. When
+  free slots drop below 3 mid-goal and a base exists, the agent
+  detours automatically - pause, walk home, dump tunnel junk, resume -
+  so target drops never go unpicked for lack of space.
 - **Structure discovery (M9):** `/agent explore village` locates the
   nearest tagged structure via vanilla world lookup and walks there —
   arrival verified against live distance. Also searchable: mineshaft,
