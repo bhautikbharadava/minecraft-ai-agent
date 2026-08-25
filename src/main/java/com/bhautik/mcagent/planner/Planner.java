@@ -3,6 +3,7 @@ package com.bhautik.mcagent.planner;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.BreakBlockAction;
 import com.bhautik.mcagent.action.CraftAction;
+import com.bhautik.mcagent.action.LightTorchAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.action.MoveAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
@@ -13,6 +14,7 @@ import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
 import com.bhautik.mcagent.world.BlockLocator;
 import com.bhautik.mcagent.world.DistanceSensor;
+import com.bhautik.mcagent.world.LightSensor;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,6 +53,10 @@ public final class Planner {
     public static final String FURNACE_ITEM = "minecraft:furnace";
     /** Standard fuel the planner demands for furnace runs. */
     public static final String FUEL_ITEM = "minecraft:coal";
+    /** Lighting carried for tunnel safety (mob-spawn prevention). */
+    public static final String TORCH_ITEM = "minecraft:torch";
+    /** Mining plans top torches back up to this many first. */
+    public static final int MIN_TORCHES = 8;
 
     /** How far the agent will walk to reach an existing utility block. */
     public static final int BLOCK_SEARCH_RADIUS = 48;
@@ -61,7 +67,8 @@ public final class Planner {
     /**
      * Execution seams handed to emitted actions: real grid crafting,
      * real furnace cooking, real block placement and collection, world
-     * checks that verify all of it, and live distances for navigation.
+     * checks that verify all of it, live distances for navigation, and
+     * the light level for torch placement.
      */
     public record Environment(CraftAction.Crafter crafter,
                               SmeltAction.Smelter smelter,
@@ -71,7 +78,8 @@ public final class Planner {
                               SmeltingResolver smeltingResolver,
                               BlockLocator tableLocator,
                               BlockLocator furnaceLocator,
-                              DistanceSensor distanceSensor) {
+                              DistanceSensor distanceSensor,
+                              LightSensor lightSensor) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -104,16 +112,33 @@ public final class Planner {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
         expansion.expand(itemId, targetCount);
-        // Blocks this plan placed are picked back up once everything else
-        // ran; pre-existing world blocks are left where they are.
+        List<AgentAction> plan = new ArrayList<>(expansion.plan);
+        // Torch upkeep (PRD 15 background tier): mining plans top torches
+        // back up first, when the recipe resolves and stock is low.
+        boolean minesSomething = plan.stream().anyMatch(step -> step instanceof MineAction);
+        int carriedTorches = Math.max(plannedCounts.apply(TORCH_ITEM), 0);
+        if (minesSomething && carriedTorches < MIN_TORCHES) {
+            Expansion torchRun = new Expansion(resolver, plannedCounts, ownedItemIds,
+                    liveCounts, environment);
+            try {
+                torchRun.expand(TORCH_ITEM, MIN_TORCHES - carriedTorches);
+                plan.addAll(0, torchRun.plan);
+                com.bhautik.mcagent.McAgent.LOGGER.info(
+                        "[Planner] Torch upkeep prepended (plan now {} steps)", plan.size());
+            } catch (PlanningException unresolvableTorches) {
+                // No torch route: mine anyway; survival handles the rest.
+            }
+        }
+        // A table or furnace this plan placed is picked back up once
+        // everything else ran; pre-existing world blocks stay put.
         for (String placed : expansion.placedBlocks) {
             BlockLocator locator = placed.equals(CRAFTING_TABLE_ITEM)
                     ? environment.tableLocator() : environment.furnaceLocator();
-            expansion.plan.add(new BreakBlockAction(placed,
+            plan.add(new BreakBlockAction(placed,
                     environment.breaker(),
                     () -> liveCounts.applyAsInt(placed)));
         }
-        return expansion.plan;
+        return plan;
     }
 
     /** Per-plan state: output list, cycle guard, and block bookkeeping. */
@@ -166,6 +191,10 @@ public final class Planner {
                 plan.add(new MineAction(sourceBlock, have, have + missing,
                         () -> liveCounts.applyAsInt(itemId), baritoneIntegration,
                         toolToHold));
+                // Drop a torch right after digging so tunnels stay lit.
+                plan.add(new LightTorchAction(TORCH_ITEM, environment.lightSensor(),
+                        () -> Math.max(liveCounts.applyAsInt(TORCH_ITEM), 0),
+                        environment.placer()));
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }

@@ -76,6 +76,11 @@ public final class VanillaPlacementExecutor {
         return itemId -> place(player, itemId);
     }
 
+    /** Light level where the agent stands (0-15). */
+    public static com.bhautik.mcagent.world.LightSensor lightSensor(ServerPlayer player) {
+        return () -> player.level().getMaxLocalRawBrightness(player.blockPosition());
+    }
+
     /**
      * Removes a nearby block the agent itself placed and returns its item
      * straight to inventory; verifies both the cleared state and the

@@ -71,6 +71,12 @@ Implemented:
   outward through Baritone's explore process until the live biome
   sensor reports arrival — verified independently, with re-issue on
   stalls and an honest failure when the budget runs out.
+- **Torch lighting (survival prevention):** mining plans top torches
+  up to 8 first (coal + sticks resolve through the normal planner),
+  and every mining step is followed by a best-effort `Light area`
+  action that drops a torch whenever the agent stands below light
+  level 8 — keeping tunnels unspawnable instead of reacting to the
+  mobs afterwards.
 - **Tool ladders:** when a mineable item needs a pickaxe tier the agent
   doesn't have, the planner folds the cheapest qualifying tool's whole
   chain into the plan instead of refusing — `/agent get stone_pickaxe 1`

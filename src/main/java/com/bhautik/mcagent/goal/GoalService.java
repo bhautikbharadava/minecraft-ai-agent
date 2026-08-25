@@ -389,7 +389,8 @@ public final class GoalService {
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
                             com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
                             com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    (x, y, z) -> player.distanceToSqr(x, y, z));
+                    (x, y, z) -> player.distanceToSqr(x, y, z),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.lightSensor(player));
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
