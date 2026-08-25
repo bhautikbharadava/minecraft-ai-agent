@@ -45,6 +45,55 @@ public final class VanillaStorage {
         };
     }
 
+
+    /**
+     * Pulls up to {@code maxStacks} stacks of the listed items from a
+     * nearby chest into the agent's inventory (restock direction).
+     */
+    public static com.bhautik.mcagent.action.WithdrawAction.Withdrawer withdrawer(
+            ServerPlayer player, int radius) {
+        return (itemIds, maxStacks) -> {
+            Container chest = findChest(player, radius);
+            if (chest == null) {
+                return 0;
+            }
+            int moved = 0;
+            for (int slot = 0; slot < chest.getContainerSize() && moved < maxStacks;
+                    slot++) {
+                ItemStack stack = chest.getItem(slot);
+                if (stack.isEmpty() || !itemIds.contains(idOf(stack))) {
+                    continue;
+                }
+                if (player.getInventory().add(stack.copy())) {
+                    chest.removeItem(slot, stack.getCount());
+                    moved++;
+                } else {
+                    // Agent bag full: stop before splitting stacks.
+                    break;
+                }
+            }
+            return moved;
+        };
+    }
+
+    /** Ids of edible items currently inside the nearby chest. */
+    public static java.util.List<String> foodIdsInChest(ServerPlayer player, int radius) {
+        Container chest = findChest(player, radius);
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        if (chest == null) {
+            return ids;
+        }
+        for (int slot = 0; slot < chest.getContainerSize(); slot++) {
+            ItemStack stack = chest.getItem(slot);
+            if (!stack.isEmpty()
+                    && stack.get(net.minecraft.core.component.DataComponents.FOOD) != null
+                    && !ids.contains(idOf(stack))) {
+                ids.add(idOf(stack));
+            }
+        }
+        return ids;
+    }
+
     /** Merges into matching chest stacks first, then any empty slot. */
     private static boolean tryStore(Container chest, ItemStack stack) {
         for (int slot = 0; slot < chest.getContainerSize(); slot++) {

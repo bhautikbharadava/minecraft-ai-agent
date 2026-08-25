@@ -66,10 +66,41 @@ public final class GoalService {
 
     private ActiveRun run;
 
-    // Session home base (PRD M11 groundwork): anchor plus the chest the
-    // agent stores loot in. Not persisted across restarts yet.
-    private net.minecraft.core.BlockPos baseAnchor;
-    private net.minecraft.core.BlockPos baseChestPos;
+    // Home base (PRD M11 groundwork): persisted in overworld saved data,
+    // so it survives server restarts.
+    private net.minecraft.core.BlockPos baseAnchor(MinecraftServer server) {
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        if (state == null) {
+            return null;
+        }
+        int[] a = state.anchor();
+        return state.hasChest() || a[0] != 0 || a[1] != 0 || a[2] != 0
+                ? new net.minecraft.core.BlockPos(a[0], a[1], a[2]) : null;
+    }
+
+    private net.minecraft.core.BlockPos baseChestPos(MinecraftServer server) {
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        int[] c = state == null ? null : state.chest();
+        return c == null ? null : new net.minecraft.core.BlockPos(c[0], c[1], c[2]);
+    }
+
+    private void saveBaseChest(MinecraftServer server, net.minecraft.core.BlockPos chest) {
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        var anchor = baseAnchor(server);
+        if (anchor != null) {
+            state.setAnchor(anchor.getX(), anchor.getY(), anchor.getZ());
+        }
+        state.setChest(chest.getX(), chest.getY(), chest.getZ());
+    }
+
+    private void saveBaseAnchor(MinecraftServer server, net.minecraft.core.BlockPos anchor) {
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        state.setAnchor(anchor.getX(), anchor.getY(), anchor.getZ());
+        var chest = baseChestPos(server);
+        if (chest != null) {
+            state.setChest(chest.getX(), chest.getY(), chest.getZ());
+        }
+    }
 
     public GoalService(AgentExecutor executor) {
         this.executor = executor;
@@ -288,30 +319,33 @@ public final class GoalService {
             }
             var pos = player.blockPosition().immutable();
             StringBuilder report = new StringBuilder("Base set at "
-                    + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+                    + pos.getX() + " " + pos.getY() + " " + pos.getZ()
+                    + " (persisted)");
             var placer = com.bhautik.mcagent.integration.VanillaPlacementExecutor
                     .placer(player);
-            if (baseChestPos == null) {
+            var existingChest = baseChestPos(player.level().getServer());
+            if (existingChest == null) {
                 var chestResult = placer.place(
                         com.bhautik.mcagent.planner.Planner.BASE_CHEST_ITEM);
                 if (chestResult.success()) {
-                    baseChestPos = player.blockPosition();
+                    saveBaseChest(player.level().getServer(), player.blockPosition());
                     report.append("\nPlaced base chest");
                 } else {
                     report.append("\nNo chest placed: ").append(chestResult.failureReason())
                             .append(" (craft one with /agent get chest 1)");
                 }
             } else {
-                report.append("\nBase chest already at ").append(baseChestPos.getX())
-                        .append(" ").append(baseChestPos.getY()).append(" ")
-                        .append(baseChestPos.getZ());
+                saveBaseChest(player.level().getServer(), existingChest);
+                report.append("\nBase chest already at ").append(existingChest.getX())
+                        .append(" ").append(existingChest.getY()).append(" ")
+                        .append(existingChest.getZ());
             }
             var tableResult = placer.place(
                     com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM);
             report.append(tableResult.success()
                     ? "\nPlaced crafting table"
                     : "\nNo crafting table placed: " + tableResult.failureReason());
-            baseAnchor = pos;
+            saveBaseAnchor(player.level().getServer(), pos);
             McAgent.LOGGER.info("[Agent] Base established at {} {} {}",
                     pos.getX(), pos.getY(), pos.getZ());
             return report.toString();
@@ -324,7 +358,7 @@ public final class GoalService {
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent cancel first.";
             }
-            if (baseChestPos == null) {
+            if (baseChestPos(player.level().getServer()) == null) {
                 return "No base yet. Run /agent base here first.";
             }
             List<String> ids;
@@ -365,6 +399,60 @@ public final class GoalService {
                     + "Storing " + String.join(", ", ids.size() > 3
                             ? ids.subList(0, 3) : ids)
                     + (ids.size() > 3 ? ", ..." : "") + " at base.";
+        }
+    }
+
+    /** Pull supplies back out of the base chest (torches, food, items). */
+    public String restock(ServerPlayer player, String nameArg, int count) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent cancel first.";
+            }
+            var chest = baseChestPos(player.level().getServer());
+            if (chest == null) {
+                return "No base yet. Run /agent base here first.";
+            }
+            List<String> ids;
+            int maxStacks;
+            switch (nameArg.trim().toLowerCase()) {
+                case "torches" -> {
+                    ids = List.of(com.bhautik.mcagent.planner.Planner.TORCH_ITEM);
+                    maxStacks = 2;
+                }
+                case "food" -> {
+                    ids = com.bhautik.mcagent.integration.VanillaStorage.foodIdsInChest(
+                            player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS);
+                    if (ids.isEmpty()) {
+                        return "No food stored in the base chest.";
+                    }
+                    maxStacks = 2;
+                }
+                default -> {
+                    Optional<MinecraftItem> resolved =
+                            resolve(nameArg).or(() -> resolve("minecraft:" + nameArg));
+                    if (resolved.isEmpty()) {
+                        return "Invalid item name: " + nameArg
+                                + " (presets: torches, food)";
+                    }
+                    ids = List.of(resolved.get().id());
+                    maxStacks = Math.max(1, Math.min(3, (count + 63) / 64));
+                }
+            }
+            ExploreGoal goal = new ExploreGoal("restock " + nameArg, () -> false);
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            goalManager.register(goal);
+            ActiveRun activeRun = new ActiveRun(goal, null, player.getUUID(), 0,
+                    snapshot(player), player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            activeRun.restockIds = ids;
+            activeRun.restockMaxStacks = maxStacks;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            return goal.progressReport() + System.lineSeparator()
+                    + "Restocking from base chest.";
         }
     }
 
@@ -421,7 +509,7 @@ public final class GoalService {
     private void handleInventoryPressure(ActiveRun activeRun, ServerPlayer player) {
         if (activeRun.stashing || activeRun.recovering || activeRun.securingFood
                 || activeRun.exploreTargetBiome != null || activeRun.stashIds != null
-                || baseChestPos == null) {
+                || baseChestPos(player.level().getServer()) == null) {
             return;
         }
         var inventory = player.getInventory();
@@ -453,7 +541,7 @@ public final class GoalService {
     /** Walk-to-base (when far) plus a junk-list deposit step. */
     private java.util.List<AgentAction> stashJunkDetour(ActiveRun activeRun,
                                                         ServerPlayer player) {
-        var chest = baseChestPos;
+        var chest = baseChestPos(player.level().getServer());
         java.util.List<AgentAction> detour = new ArrayList<>();
         java.util.function.DoubleSupplier distance = () ->
                 player.distanceToSqr(chest.getX(), chest.getY(), chest.getZ());
@@ -584,7 +672,7 @@ public final class GoalService {
                     liveCountById(activeRun.server, activeRun.playerId, piece.id())
                             >= activeRun.requested);
         }
-        if (activeRun.stashIds != null) {
+        if (activeRun.restockIds != null || activeRun.stashIds != null) {
             return runQueueIsEmpty(activeRun);
         }
         if (activeRun.exploreTargetBiome != null) {
@@ -648,8 +736,30 @@ public final class GoalService {
                     actions.stream().map(AgentAction::title).toList());
             return actions;
         }
+        if (activeRun.restockIds != null) {
+            var chest = baseChestPos(activeRun.server);
+            if (chest == null) {
+                activeRun.goal.markFailed("no base chest");
+                return List.of();
+            }
+            java.util.function.DoubleSupplier distance = () ->
+                    player.distanceToSqr(chest.getX(), chest.getY(), chest.getZ());
+            List<AgentAction> actions = new ArrayList<>();
+            if (player.blockPosition().distSqr(chest) > 16.0) {
+                actions.add(new com.bhautik.mcagent.action.MoveAction("base chest",
+                        chest.getX(), chest.getY(), chest.getZ(),
+                        4.0 * 4.0, distance::getAsDouble,
+                        executor.baritoneIntegration()));
+            }
+            actions.add(new com.bhautik.mcagent.action.WithdrawAction(
+                    "Restock from base", activeRun.restockIds,
+                    com.bhautik.mcagent.integration.VanillaStorage.withdrawer(player,
+                            com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS)));
+            return actions;
+        }
+
         if (activeRun.stashIds != null) {
-            var chest = baseChestPos;
+            var chest = baseChestPos(activeRun.server);
             if (chest == null) {
                 activeRun.goal.markFailed("no base chest");
                 return List.of();
@@ -880,6 +990,9 @@ public final class GoalService {
 
         /** Non-null for stash runs: the ids allowed into the chest. */
         List<String> stashIds;
+        /** Non-null for restock runs: the ids pulled from the chest. */
+        List<String> restockIds;
+        int restockMaxStacks;
         /** True while an auto-stash detour is in the pipeline. */
         boolean stashing;
 

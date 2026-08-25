@@ -875,6 +875,39 @@ public final class AgentCli {
         assertEquals(deposit.status(), ActionStatus.SUCCESS, "deposit completes");
         assertEquals(deposit.storedStacks(), 6, "all batches counted");
 
+        // Restock: withdraws until the chest stops giving, verified by
+        // moved-stack counts.
+        int[] chestStock = {3};
+        com.bhautik.mcagent.action.WithdrawAction withdraw =
+                new com.bhautik.mcagent.action.WithdrawAction("Restock torches",
+                        List.of("minecraft:torch"),
+                        (ids, maxStacks) -> {
+                            int give = Math.min(maxStacks, chestStock[0]);
+                            chestStock[0] -= give;
+                            return give;
+                        });
+        withdraw.start();
+        for (int i = 0; i < 5 && withdraw.status() == ActionStatus.RUNNING; i++) {
+            withdraw.tick();
+        }
+        assertEquals(withdraw.status(), ActionStatus.SUCCESS, "withdraw completes");
+        assertEquals(withdraw.withdrawnStacks(), 3, "all stocked stacks taken");
+
+        // Base saved-state codec roundtrips through JSON ops.
+        var state = com.bhautik.mcagent.integration.BaseSavedState.TYPE;
+        com.bhautik.mcagent.integration.BaseSavedState persisted =
+                new com.bhautik.mcagent.integration.BaseSavedState();
+        persisted.setAnchor(12, 64, -7);
+        persisted.setChest(14, 64, -9);
+        var encoded = com.bhautik.mcagent.integration.BaseSavedState.CODEC.encodeStart(
+                com.mojang.serialization.JsonOps.INSTANCE, persisted).getOrThrow();
+        var decoded = com.bhautik.mcagent.integration.BaseSavedState.CODEC.parse(
+                com.mojang.serialization.JsonOps.INSTANCE, encoded).getOrThrow();
+        assertEquals(decoded.anchor().length, 3, "anchor survives roundtrip");
+        if (decoded.chest() == null || decoded.chest()[0] != 14) {
+            throw new IllegalStateException("chest position lost in roundtrip");
+        }
+
         // Suspension pauses without cancelling: the action comes back
         // re-launchable and the backend was told to stop.
         FakeBackend survivalBackend = new FakeBackend();

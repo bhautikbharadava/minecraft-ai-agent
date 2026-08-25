@@ -78,7 +78,8 @@ master.
 - No combat: agent is passive toward mobs (eats/waits instead of fighting)
 - Enchanting entirely unsupported (XP, table use, book/leather chain)
 - Netherite unreachable (smithing + nether not implemented)
-- Base position is session-only; lost on restart
+- Auto-restock before goals is command-driven only (`/agent restock`);
+  automatic pre-goal restocking is a future refinement
 - Smelting supports plain furnace + coal fuel only (no blast furnace,
   lava, other fuels); one recipe input per run
 - Structure search limited to vanilla-tagged names
@@ -91,8 +92,8 @@ master.
 
 | # | Item | Notes | Effort | Status |
 |---|---|---|---|---|
-| 1 | Restock from base | inverse of stash: withdraw torches/food before goals | S | ⬜ |
-| 2 | Base persistence | SavedDataType on overworld storage (API recon done) | S | ⬜ |
+| 1 | Restock from base | `/agent restock torches\|food\|<item> [count]` | S | ✅ |
+| 2 | Base persistence | BaseSavedState via overworld SavedDataStorage | S | ✅ |
 | 3 | Combat v0 | AttackAction + flee-on-sustained-damage (M8 leftover) | M | ⬜ |
 | 4 | Proactive food economy | cook hunted meat via furnace pipeline; berry upkeep | M | ⬜ |
 | 5 | M10 Building foundation | blueprint placement + structure verification | M-L | ⬜ |

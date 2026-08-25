@@ -60,6 +60,14 @@ public final class AgentCommand {
                                         .executes(context -> stash(context.getSource(), goalService,
                                                 StringArgumentType.getString(context, "item"),
                                                 StringArgumentType.getString(context, "amount"))))))
+                .then(Commands.literal("restock")
+                        .then(Commands.argument("item", StringArgumentType.word())
+                                .executes(context -> restock(context.getSource(), goalService,
+                                        StringArgumentType.getString(context, "item"), 16))
+                                .then(Commands.argument("count", IntegerArgumentType.integer(1))
+                                        .executes(context -> restock(context.getSource(), goalService,
+                                                StringArgumentType.getString(context, "item"),
+                                                IntegerArgumentType.getInteger(context, "count"))))))
                 .then(Commands.literal("goal")
                         .executes(context -> {
                             context.getSource().sendSuccess(() -> Component.literal(goalService.describeActiveGoal()), false);
@@ -113,6 +121,19 @@ public final class AgentCommand {
         ServerPlayer player = source.getPlayerOrException();
         String report = goalService.stash(player, item, amount);
         if (report.startsWith("Invalid") || report.startsWith("No base")) {
+            source.sendFailure(Component.literal(report));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal(report), false);
+        return 1;
+    }
+
+    private static int restock(CommandSourceStack source, GoalService goalService,
+                               String name, int count) throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        String report = goalService.restock(player, name, count);
+        if (report.startsWith("Invalid") || report.startsWith("No base")
+                || report.startsWith("No food")) {
             source.sendFailure(Component.literal(report));
             return 0;
         }
