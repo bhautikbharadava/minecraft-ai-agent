@@ -11,8 +11,11 @@ import com.bhautik.mcagent.crafting.RecipeResolver;
 import com.bhautik.mcagent.crafting.SmeltingResolver;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
+import com.bhautik.mcagent.world.BiomeSensor;
 import com.bhautik.mcagent.world.BlockLocator;
 import com.bhautik.mcagent.world.DistanceSensor;
+import com.bhautik.mcagent.world.PositionAnchor;
+import com.bhautik.mcagent.action.TunnelLighter;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,6 +54,12 @@ public final class Planner {
     public static final String FURNACE_ITEM = "minecraft:furnace";
     /** Standard fuel the planner demands for furnace runs. */
     public static final String FUEL_ITEM = "minecraft:coal";
+    /** Lighting carried for tunnel safety (mob-spawn prevention). */
+    public static final String TORCH_ITEM = "minecraft:torch";
+    /** Mining plans trigger a torch top-up when stock drops below this. */
+    public static final int MIN_TORCHES = 16;
+    /** Top-ups fill a full stack so long digs never run dark. */
+    public static final int TORCH_STACK_TARGET = 64;
 
     /** How far the agent will walk to reach an existing utility block. */
     public static final int BLOCK_SEARCH_RADIUS = 48;
@@ -61,7 +70,8 @@ public final class Planner {
     /**
      * Execution seams handed to emitted actions: real grid crafting,
      * real furnace cooking, real block placement and collection, world
-     * checks that verify all of it, and live distances for navigation.
+     * checks that verify all of it, continuous tunnel lighting, and the
+     * live biome/anchor used to chain exploration for gated resources.
      */
     public record Environment(CraftAction.Crafter crafter,
                               SmeltAction.Smelter smelter,
@@ -71,7 +81,10 @@ public final class Planner {
                               SmeltingResolver smeltingResolver,
                               BlockLocator tableLocator,
                               BlockLocator furnaceLocator,
-                              DistanceSensor distanceSensor) {
+                              DistanceSensor distanceSensor,
+                              TunnelLighter tunnelLighter,
+                              BiomeSensor biomeSensor,
+                              PositionAnchor anchor) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -104,16 +117,33 @@ public final class Planner {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
         expansion.expand(itemId, targetCount);
-        // Blocks this plan placed are picked back up once everything else
-        // ran; pre-existing world blocks are left where they are.
+        List<AgentAction> plan = new ArrayList<>(expansion.plan);
+        // Torch upkeep (PRD 15 background tier): mining plans top torches
+        // back up first, when the recipe resolves and stock is low.
+        boolean minesSomething = plan.stream().anyMatch(step -> step instanceof MineAction);
+        int carriedTorches = Math.max(plannedCounts.apply(TORCH_ITEM), 0);
+        if (minesSomething && carriedTorches < MIN_TORCHES) {
+            Expansion torchRun = new Expansion(resolver, plannedCounts, ownedItemIds,
+                    liveCounts, environment);
+            try {
+                torchRun.expand(TORCH_ITEM, TORCH_STACK_TARGET - carriedTorches);
+                plan.addAll(0, torchRun.plan);
+                com.bhautik.mcagent.McAgent.LOGGER.info(
+                        "[Planner] Torch upkeep prepended (plan now {} steps)", plan.size());
+            } catch (PlanningException unresolvableTorches) {
+                // No torch route: mine anyway; survival handles the rest.
+            }
+        }
+        // A table or furnace this plan placed is picked back up once
+        // everything else ran; pre-existing world blocks stay put.
         for (String placed : expansion.placedBlocks) {
             BlockLocator locator = placed.equals(CRAFTING_TABLE_ITEM)
                     ? environment.tableLocator() : environment.furnaceLocator();
-            expansion.plan.add(new BreakBlockAction(placed,
+            plan.add(new BreakBlockAction(placed,
                     environment.breaker(),
                     () -> liveCounts.applyAsInt(placed)));
         }
-        return expansion.plan;
+        return plan;
     }
 
     /** Per-plan state: output list, cycle guard, and block bookkeeping. */
@@ -158,6 +188,15 @@ public final class Planner {
                 if (toolReason != null) {
                     planMissingTool(itemId, toolReason);
                 }
+                // Biome-locked sources require standing in their biome
+                // first; exploration is just another dependency step.
+                DirectAcquisitions.requiredBiomeFor(itemId).ifPresent(required -> {
+                    if (!required.equals(environment.biomeSensor().current())) {
+                        plan.add(new com.bhautik.mcagent.action.ExploreAction(required,
+                                environment.anchor().x(), environment.anchor().z(),
+                                environment.biomeSensor()::current, baritoneIntegration));
+                    }
+                });
                 // Hold the right tier while mining: wrong-tool breaks
                 // destroy gated ores without dropping anything.
                 String toolToHold = DirectAcquisitions
@@ -165,7 +204,8 @@ public final class Planner {
                         .orElse(null);
                 plan.add(new MineAction(sourceBlock, have, have + missing,
                         () -> liveCounts.applyAsInt(itemId), baritoneIntegration,
-                        toolToHold));
+                        toolToHold,
+                        environment.tunnelLighter()));
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }

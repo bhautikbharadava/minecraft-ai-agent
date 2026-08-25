@@ -64,6 +64,23 @@ public final class AgentExecutor {
         current = null;
     }
 
+    /**
+     * Survival suspension (PRD 15): stops the action's external effects
+     * and returns it so the caller can re-queue it; the agent brain then
+     * runs recovery steps first. Null when nothing was running.
+     */
+    public AgentAction suspendCurrent(String reason) {
+        if (current == null || current.status().terminal()) {
+            return null;
+        }
+        McAgent.LOGGER.info("[Recovery] Suspending action [{}]: {}",
+                current.title(), reason);
+        current.pause();
+        AgentAction suspended = current;
+        current = null;
+        return suspended;
+    }
+
     public AgentState state() {
         return busy() ? AgentState.EXECUTING : AgentState.IDLE;
     }

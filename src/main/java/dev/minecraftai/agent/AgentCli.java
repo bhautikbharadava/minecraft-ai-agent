@@ -38,6 +38,8 @@ public final class AgentCli {
             validateMineActionLifecycle();
             validateAcquisitionTable();
             validateDependencyPlanning();
+            validateSurvivalInterruptions();
+            validateExploration();
             return;
         }
         System.out.println(handler.handle(String.join(" ", args)));
@@ -188,6 +190,9 @@ public final class AgentCli {
                 cell("minecraft:oak_planks"), SlotSpec.EMPTY,
                 cell("minecraft:stick"), SlotSpec.EMPTY,
                 SlotSpec.EMPTY, cell("minecraft:stick"), SlotSpec.EMPTY));
+        // Torch upkeep: mining plans top lighting up before digging.
+        recipes.put("minecraft:torch", recipe("minecraft:torch", 4,
+                cell("minecraft:coal"), cell("minecraft:stick")));
         CraftAction.Crafter crafter = (recipe, times) -> times;
         PlaceBlockAction.Placer placer = itemId -> PlaceBlockAction.Placer.Result.ok();
 
@@ -208,14 +213,14 @@ public final class AgentCli {
 
         // sticks x8: need 8 planks -> own 0 logs -> mine 1 log, craft 4 planks, craft 2x sticks
         List<AgentAction> stickPlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
+                torchStocked(), Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:stick", 8);
         assertEquals(stickPlan.size(), 3, "stick chain length");
         assertContains(stickPlan.get(0).title(), "Mine");
         assertContains(stickPlan.get(1).title(), "oak_planks");
 
         try {
-            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
+            planner.planAcquisition(resolver, torchStocked(), Set.of(), id -> 0,
                     env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:iron_ingot", 1);
             throw new IllegalStateException("smelted goods must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
@@ -229,7 +234,7 @@ public final class AgentCli {
                 cell("minecraft:iron_ingot"), cell("minecraft:stick"),
                 cell("minecraft:stick")));
         try {
-            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
+            planner.planAcquisition(resolver, torchStocked(), Set.of(), id -> 0,
                     env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:iron_pickaxe", 1);
             throw new IllegalStateException("unresolvable table-gated goods must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
@@ -239,7 +244,7 @@ public final class AgentCli {
         // M6: a craftable table-gated item plans acquire-table -> place ->
         // craft -> pick-the-table-back-up when the world has no table yet.
         List<AgentAction> chestPlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
+                torchStocked(), Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:chest", 1);
         assertEquals(chestPlan.size(), 6, "chest chain length");
         assertContains(chestPlan.get(0).title(), "Mine");
@@ -256,7 +261,7 @@ public final class AgentCli {
         // With a table already in range, no table acquisition or placement,
         // and the world's table is left alone (no collect step).
         List<AgentAction> nearTablePlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, blockNearby()),
+                torchStocked(), Set.of(), id -> 0, env(crafter, placer, blockNearby()),
                 "minecraft:chest", 1);
         assertEquals(nearTablePlan.size(), 3, "near-table chain length");
         if (nearTablePlan.stream().anyMatch(action -> action instanceof PlaceBlockAction)
@@ -268,7 +273,7 @@ public final class AgentCli {
         // A placed table beyond interaction range is walked to, not rebuilt,
         // and pre-existing world tables are never collected.
         List<AgentAction> farTablePlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, blockFarAway()),
+                torchStocked(), Set.of(), id -> 0, env(crafter, placer, blockFarAway()),
                 "minecraft:chest", 1);
         assertEquals(farTablePlan.size(), 4, "far-table chain length");
         assertContains(farTablePlan.get(0).title(), "Mine");
@@ -294,6 +299,7 @@ public final class AgentCli {
         // collects) it.
         Map<String, Integer> carryingTable = new HashMap<>();
         carryingTable.put("minecraft:crafting_table", 1);
+        carryingTable.put("minecraft:torch", 99);
         List<AgentAction> carriedPlan = planner.planAcquisition(resolver,
                 id -> carryingTable.getOrDefault(id, 0), Set.of(), id -> 0,
                 env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:chest", 1);
@@ -305,7 +311,7 @@ public final class AgentCli {
 
         // Multiple table-gated crafts share one placement per plan.
         List<AgentAction> bulkPlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
+                torchStocked(), Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:chest", 3);
         long placements = bulkPlan.stream()
                 .filter(action -> action instanceof PlaceBlockAction)
@@ -315,7 +321,7 @@ public final class AgentCli {
         // Tool-gated mining with no pickaxe plans the pickaxe chain first:
         // mine log -> planks -> sticks -> place table -> wooden_pickaxe -> mine.
         List<AgentAction> cobblePlan = planner.planAcquisition(resolver,
-                id -> 0, Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
+                torchStocked(), Set.of(), id -> 0, env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE),
                 "minecraft:cobblestone", 3);
         if (cobblePlan.size() != 8) {
             throw new IllegalStateException("tool-first chain length: expected [8] got ["
@@ -338,7 +344,7 @@ public final class AgentCli {
         // and explains what could not be planned.
         recipes.remove("minecraft:wooden_pickaxe");
         try {
-            planner.planAcquisition(resolver, id -> 0, Set.of(), id -> 0,
+            planner.planAcquisition(resolver, torchStocked(), Set.of(), id -> 0,
                     env(crafter, placer, blockNearby()), "minecraft:cobblestone", 3);
             throw new IllegalStateException("ungateable mining must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
@@ -365,6 +371,7 @@ public final class AgentCli {
         // needing the whole furnace-crafting chain in the fake recipes.
         Map<String, Integer> carryingFurnace = new HashMap<>();
         carryingFurnace.put("minecraft:furnace", 1);
+        carryingFurnace.put("minecraft:torch", 99);
         List<AgentAction> ingotPlan = planner.planAcquisition(resolver,
                 id -> carryingFurnace.getOrDefault(id, 0), miner, id -> 0,
                 env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
@@ -391,15 +398,14 @@ public final class AgentCli {
         // The iron route still refuses honestly when the furnace path is
         // missing and only the nugget loop exists.
         try {
-            planner.planAcquisition(resolver, id -> 0, miner, id -> 0,
+            planner.planAcquisition(resolver, torchStocked(), miner, id -> 0,
                     env(crafter, placer, blockNearby()), "minecraft:iron_ingot", 1);
             throw new IllegalStateException("smeltless ingots must fail planning");
         } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
             assertContains(expected.getMessage(), "no supported acquisition strategy");
         }
 
-        // Smelting verifies output against live inventory; a missing
-        // furnace fails fast.
+
         int[] ingots = {0};
         boolean[] furnaceNear = {true};
         com.bhautik.mcagent.action.SmeltAction smelt =
@@ -485,6 +491,83 @@ public final class AgentCli {
         }
         assertEquals(stuck.status(), ActionStatus.FAILED, "stuck collect fails");
         assertContains(String.valueOf(stuck.failureReason()), "within reach");
+
+        // Torch upkeep: a mining plan with low torch stock crafts torches
+        // BEFORE the goal's own digging begins.
+        List<AgentAction> unlitPlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of("minecraft:wooden_pickaxe"), id -> 0,
+                env(crafter, placer, blockNearby()), "minecraft:cobblestone", 3);
+        int torchCraftIndex = -1;
+        for (int i = 0; i < unlitPlan.size(); i++) {
+            if (unlitPlan.get(i) instanceof CraftAction
+                    && unlitPlan.get(i).title().contains("torch")) {
+                torchCraftIndex = i;
+            }
+        }
+        int goalMiningIndex = -1;
+        for (int i = 0; i < unlitPlan.size(); i++) {
+            if (unlitPlan.get(i) instanceof MineAction
+                    && unlitPlan.get(i).title().contains("stone")) {
+                goalMiningIndex = i;
+                break;
+            }
+        }
+        if (torchCraftIndex < 0 || goalMiningIndex < 0 || torchCraftIndex > goalMiningIndex) {
+            throw new IllegalStateException("expected torches crafted before goal mining, got "
+                    + unlitPlan.stream().map(AgentAction::title).toList());
+        }
+
+        // Tunnel lighting rides inside MineAction: the lighter is polled
+        // every second while digging and placements are best-effort.
+        int[] lightTicks = {0};
+        com.bhautik.mcagent.action.TunnelLighter countingLighter = () -> {
+            lightTicks[0]++;
+            return true;
+        };
+        FakeBackend litBackend = new FakeBackend();
+        int[] slowOre = {0};
+        MineAction litMine = new MineAction("minecraft:diamond_ore", 0, 2, () -> slowOre[0],
+                litBackend, null, countingLighter);
+        litMine.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.MineAction.LIGHT_INTERVAL_TICKS; i++) {
+            litMine.tick();
+            if (litMine.status() == ActionStatus.SUCCESS) {
+                break;
+            }
+        }
+        if (lightTicks[0] == 0) {
+            throw new IllegalStateException("mining must poll the tunnel lighter");
+        }
+
+        // Biome-gated gathering chains exploration before the dig, and
+        // skips it entirely when already standing in the right biome.
+        String[] currentBiome = {"minecraft:plains"};
+        List<AgentAction> cactusPlan = planner.planAcquisition(resolver,
+                torchStocked(), Set.of(), id -> 0,
+                env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
+                        output -> Optional.empty(),
+                        () -> currentBiome[0], 12, 34),
+                "minecraft:cactus", 4);
+        assertEquals(cactusPlan.get(0).getClass(),
+                com.bhautik.mcagent.action.ExploreAction.class,
+                "cactus in plains starts with exploration");
+        assertContains(cactusPlan.get(0).title(), "desert");
+        assertEquals(cactusPlan.get(1).getClass(), MineAction.class,
+                "then mines the gated source");
+        com.bhautik.mcagent.action.ExploreAction walk =
+                (com.bhautik.mcagent.action.ExploreAction) cactusPlan.get(0);
+        walk.start();
+        assertEquals(walk.status(), ActionStatus.RUNNING, "explore runs while away");
+
+        currentBiome[0] = "minecraft:desert";
+        List<AgentAction> localCactusPlan = planner.planAcquisition(resolver,
+                torchStocked(), Set.of(), id -> 0,
+                env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
+                        output -> Optional.empty(),
+                        () -> currentBiome[0], 12, 34),
+                "minecraft:cactus", 4);
+        assertEquals(localCactusPlan.get(0).getClass(), MineAction.class,
+                "already-in-biome digs immediately");
     }
 
     /** Builds a planner environment around a given world-block state. */
@@ -499,6 +582,16 @@ public final class AgentCli {
             CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
             com.bhautik.mcagent.world.BlockLocator locator,
             com.bhautik.mcagent.crafting.SmeltingResolver smelting) {
+        return env(crafter, placer, locator, smelting,
+                () -> "minecraft:plains", 5, 7);
+    }
+
+    /** Environment variant with a controllable biome and anchor. */
+    private static com.bhautik.mcagent.planner.Planner.Environment env(
+            CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
+            com.bhautik.mcagent.world.BlockLocator locator,
+            com.bhautik.mcagent.crafting.SmeltingResolver smelting,
+            java.util.function.Supplier<String> biome, int anchorX, int anchorZ) {
         return new com.bhautik.mcagent.planner.Planner.Environment(
                 crafter,
                 okSmelter(),
@@ -511,7 +604,13 @@ public final class AgentCli {
                     }
                 },
                 smelting,
-                locator, locator, (x, y, z) -> 100.0);
+                locator, locator, (x, y, z) -> 100.0,
+                () -> false,
+                biome::get,
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    @Override public int x() { return anchorX; }
+                    @Override public int z() { return anchorZ; }
+                });
     }
 
     /** A smelter that always reports success. */
@@ -552,6 +651,131 @@ public final class AgentCli {
                         : Optional.empty();
             }
         };
+    }
+
+    /** Counts lambda that suppresses torch upkeep in legacy scenarios. */
+    private static java.util.function.Function<String, Integer> torchStocked() {
+        return id -> "minecraft:torch".equals(id) ? 99 : 0;
+    }
+
+    /**
+     * M8 checks: recovery waits out emergencies, eats while waiting,
+     * times out honestly when nothing helps, and the executor suspends
+     * (not cancels) running actions so they can be re-queued.
+     */
+    private static void validateSurvivalInterruptions() {
+        boolean[] emergency = {true};
+        int[] meals = {0};
+        com.bhautik.mcagent.action.RecoverAction recover =
+                new com.bhautik.mcagent.action.RecoverAction(
+                        () -> emergency[0]
+                                ? com.bhautik.mcagent.survival.Threat.emergency("health critical")
+                                : com.bhautik.mcagent.survival.Threat.NONE,
+                        () -> {
+                            meals[0]++;
+                            return 4;
+                        });
+        recover.start();
+        assertEquals(recover.status(), ActionStatus.RUNNING, "recovery starts");
+        for (int i = 0; i < 40 && recover.status() == ActionStatus.RUNNING; i++) {
+            if (i == 5) {
+                emergency[0] = false; // food kicks in, health recovers
+            }
+            recover.tick();
+        }
+        assertEquals(recover.status(), ActionStatus.SUCCESS, "recovers once emergency ends");
+        if (meals[0] == 0) {
+            throw new IllegalStateException("recovery must keep eating while critical");
+        }
+
+        // Starving with no food: timeout fails with an honest reason.
+        com.bhautik.mcagent.action.RecoverAction starving =
+                new com.bhautik.mcagent.action.RecoverAction(
+                        () -> com.bhautik.mcagent.survival.Threat.emergency("starving"),
+                        () -> 0);
+        starving.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.RecoverAction.TIMEOUT_TICKS + 1; i++) {
+            starving.tick();
+        }
+        assertEquals(starving.status(), ActionStatus.FAILED, "unrecoverable fails on timeout");
+        assertContains(String.valueOf(starving.failureReason()), "no edible food");
+
+        // Suspension pauses without cancelling: the action comes back
+        // re-launchable and the backend was told to stop.
+        FakeBackend survivalBackend = new FakeBackend();
+        int[] ore = {0};
+        MineAction minable = new MineAction("minecraft:diamond_ore", 0, 3, () -> ore[0],
+                survivalBackend);
+        com.bhautik.mcagent.executor.AgentExecutor exec =
+                new com.bhautik.mcagent.executor.AgentExecutor(
+                        new com.bhautik.mcagent.planner.Planner(survivalBackend),
+                        survivalBackend);
+        exec.launch(minable);
+        assertEquals(exec.busy(), true, "action running before suspension");
+        AgentAction suspended = exec.suspendCurrent("test emergency");
+        assertEquals(exec.busy(), false, "executor idle after suspension");
+        if (suspended == null || suspended != minable) {
+            throw new IllegalStateException("suspend must return the paused action");
+        }
+        if (minable.status() != ActionStatus.RUNNING) {
+            throw new IllegalStateException("pause must keep the action non-terminal");
+        }
+        // Relaunching the very same instance resumes ticking safely.
+        exec.launch(minable);
+        ore[0] = 3;
+        exec.tick();
+        assertEquals(minable.status(), ActionStatus.SUCCESS, "relaunched action completes");
+    }
+
+    /**
+     * M9 checks: exploration verifies arrival against the live biome
+     * sensor, re-issues on stalls, and fails honestly when the target
+     * never turns up.
+     */
+    private static void validateExploration() {
+        // Goal lifecycle: immediate success when already there.
+        dev.minecraftai.agent.goal.ExploreGoal arrived =
+                new dev.minecraftai.agent.goal.ExploreGoal("desert", () -> true);
+        arrived.activate();
+        assertEquals(arrived.status(), dev.minecraftai.agent.goal.GoalStatus.SUCCESS,
+                "already-in-biome succeeds on activate");
+        assertContains(arrived.progressReport(), "Target biome: desert");
+
+        dev.minecraftai.agent.goal.ExploreGoal traveling =
+                new dev.minecraftai.agent.goal.ExploreGoal("jungle", () -> false);
+        traveling.activate();
+        assertEquals(traveling.status(), dev.minecraftai.agent.goal.GoalStatus.ACTIVE,
+                "travel goal starts active");
+        traveling.markSuccess();
+        if (traveling.status() != dev.minecraftai.agent.goal.GoalStatus.ACTIVE) {
+            throw new IllegalStateException("markSuccess must respect the live check");
+        }
+
+        // Action: arrival verified by sensor, not backend claims.
+        FakeBackend exploringBackend = new FakeBackend();
+        String[] biome = {"minecraft:plains"};
+        com.bhautik.mcagent.action.ExploreAction explore =
+                new com.bhautik.mcagent.action.ExploreAction(
+                        "minecraft:desert", 100, 200, () -> biome[0], exploringBackend);
+        explore.start();
+        assertEquals(explore.status(), ActionStatus.RUNNING, "exploring while away");
+        biome[0] = "minecraft:desert";
+        explore.tick();
+        assertEquals(explore.status(), ActionStatus.SUCCESS, "arrival verified by biome");
+
+        // Never arriving exhausts the retry ladder honestly.
+        com.bhautik.mcagent.action.ExploreAction hopeless =
+                new com.bhautik.mcagent.action.ExploreAction(
+                        "minecraft:mushroom_fields", 0, 0, () -> "minecraft:plains",
+                        new FakeBackend());
+        hopeless.start();
+        for (int i = 0; i <= com.bhautik.mcagent.action.ExploreAction.IDLE_TIMEOUT_TICKS
+                * com.bhautik.mcagent.action.ExploreAction.MAX_ISSUE_ATTEMPTS; i++) {
+            hopeless.tick();
+        }
+        assertEquals(hopeless.status(), ActionStatus.FAILED,
+                "unfound biome fails after full budget");
+        assertContains(String.valueOf(hopeless.failureReason()), "not reached");
     }
 
     private static SlotSpec cell(String itemId) {
@@ -599,6 +823,14 @@ public final class AgentCli {
 
         @Override
         public boolean startGoTo(int x, int y, int z) {
+            return true;
+        }
+
+        int exploreCalls;
+
+        @Override
+        public boolean startExplore(int centerX, int centerZ) {
+            exploreCalls++;
             return true;
         }
 

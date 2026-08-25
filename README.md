@@ -59,6 +59,25 @@ Implemented:
   stone pickaxe → iron ore → coal → smelt → iron pickaxe), and
   `/agent get diamond_pickaxe 1` self-provides its entire prerequisite
   chain including the iron pickaxe needed to mine diamond ore.
+- **Survival interruptions (M8):** every half second the active run is
+  assessed (health ≤ 4 hearts or hunger ≤ 3 suspends work). On
+  emergency the current action is *paused* — navigation stopped, state
+  kept — re-queued, and a recovery step jumps the queue: eat the most
+  nutritious food carried, wait out the danger, then resume where it
+  left off. Starving with no food fails the goal honestly after a
+  timeout instead of mining until death.
+- **Exploration (M9, biomes):** `/agent explore desert` verifies the
+  current biome first (already there = instant success), then wanders
+  outward through Baritone's explore process until the live biome
+  sensor reports arrival — verified independently, with re-issue on
+  stalls and an honest failure when the budget runs out.
+- **Torch lighting (survival prevention):** mining plans keep a full
+  stack of 64 torches — whenever stock drops below 16, the planner
+  prepends the whole coal + sticks chain before any digging — and
+  every mining step is followed by a best-effort `Light area`
+  action that drops a torch whenever the agent stands below light
+  level 8 — keeping tunnels unspawnable instead of reacting to the
+  mobs afterwards.
 - **Tool ladders:** when a mineable item needs a pickaxe tier the agent
   doesn't have, the planner folds the cheapest qualifying tool's whole
   chain into the plan instead of refusing — `/agent get stone_pickaxe 1`
@@ -67,8 +86,14 @@ Implemented:
   crafts the stone pickaxe. If even that chain is unresolvable (e.g.
   diamonds needing an iron pickaxe while iron requires smelting), the
   refusal explains exactly which link failed.
+- **Biome-gated gathering:** biome-locked resources chain exploration
+  automatically — `/agent get cactus 8` from a plains start plans
+  `[Explore to desert, Mine cactus]`, skipping the travel step when
+  already standing in the right biome. Gated today: cactus (desert),
+  bamboo (jungle), sweet berries (taiga), red sand (badlands),
+  snowballs (snowy plains).
 
-Not implemented yet: survival interruptions, exploration goals, LLM
+Not implemented yet: structure discovery, cave exploration, LLM
 integration, or farms.
 
 ### Execution backend
@@ -83,10 +108,11 @@ swapped for any navigation backend.
 ## Commands
 
 ```text
-/agent status                 show world/inventory snapshot and executor state
-/agent get <item> <count>     register a GetItemGoal and start executing it
-/agent goal                   report the active goal's live progress
-/agent cancel                 cancel the active goal and stop mining
+/agent status                    show world/inventory snapshot and executor state
+/agent get <item> <count>        register a GetItemGoal and start executing it
+/agent explore <biome>           travel to a biome and verify arrival (UC-08)
+/agent goal                      report the active goal's live progress
+/agent cancel                    cancel the active goal and stop navigation
 ```
 
 Items resolve against the live vanilla registry (`diamond`,

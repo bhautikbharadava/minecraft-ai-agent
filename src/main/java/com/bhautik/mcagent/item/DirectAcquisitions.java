@@ -151,6 +151,23 @@ public final class DirectAcquisitions {
         return Optional.empty();
     }
 
+    /**
+     * Items whose source blocks only generate in specific biomes; the
+     * planner chains an exploration step before mining them.
+     */
+    private static final Map<String, String> BIOME_GATES = Map.of(
+            "minecraft:cactus", "minecraft:desert",
+            "minecraft:bamboo", "minecraft:jungle",
+            "minecraft:sweet_berries", "minecraft:taiga",
+            "minecraft:red_sand", "minecraft:badlands",
+            "minecraft:snowball", "minecraft:snowy_plains"
+    );
+
+    /** The biome this item's source block generates in, if restricted. */
+    public static Optional<String> requiredBiomeFor(String itemId) {
+        return Optional.ofNullable(BIOME_GATES.get(itemId));
+    }
+
     /** Exposed for JVM smoke checks. */
     public static Map<String, String> all() {
         return ACQUISITIONS.entrySet().stream()

@@ -3,11 +3,16 @@ package com.bhautik.mcagent.goal;
 import com.bhautik.mcagent.McAgent;
 import com.bhautik.mcagent.action.ActionStatus;
 import com.bhautik.mcagent.action.AgentAction;
+import com.bhautik.mcagent.action.RecoverAction;
 import com.bhautik.mcagent.crafting.VanillaCraftingExecutor;
 import com.bhautik.mcagent.crafting.VanillaRecipeResolver;
 import com.bhautik.mcagent.executor.AgentExecutor;
+import com.bhautik.mcagent.integration.VanillaSurvivalMonitor;
 import com.bhautik.mcagent.state.InventoryState;
+import com.bhautik.mcagent.survival.Threat;
+import dev.minecraftai.agent.goal.AgentGoal;
 import dev.minecraftai.agent.goal.AgentGoalManager;
+import dev.minecraftai.agent.goal.ExploreGoal;
 import dev.minecraftai.agent.goal.GetItemGoal;
 import dev.minecraftai.agent.goal.GoalStatus;
 import dev.minecraftai.agent.item.ItemRegistry;
@@ -32,6 +37,12 @@ import java.util.UUID;
 public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
+    private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
+    /** Gatherable foods the agent plans for itself when starving. */
+    private static final List<String> EMERGENCY_FOODS = List.of(
+            "minecraft:sweet_berries", "minecraft:brown_mushroom",
+            "minecraft:red_mushroom");
+    private static final int EMERGENCY_FOOD_COUNT = 8;
 
     /** JVM-only fallback used by the CLI smoke checks; in-game resolution uses the live registry. */
     private final ItemRegistry itemRegistry = ItemRegistry.vanillaDefaults();
@@ -82,7 +93,8 @@ public final class GoalService {
                 return goal.progressReport();
             }
             run = new ActiveRun(goal, item, player.getUUID(), requestedCount,
-                    snapshot, player.level().getServer());
+                    snapshot, player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
             if (!replan(run)) {
                 return finishWithFailure(run);
             }
@@ -105,6 +117,71 @@ public final class GoalService {
     public String describeActiveGoal() {
         synchronized (monitor) {
             return goalManager.describeActiveGoal();
+        }
+    }
+
+    /** True when the named biome exists in the given world's registry. */
+    public boolean isValidBiome(net.minecraft.world.level.Level level, String rawName) {
+        return resolveBiome(level, rawName).isPresent();
+    }
+
+    private Optional<String> resolveBiome(net.minecraft.world.level.Level level,
+                                          String rawName) {
+        if (rawName == null || rawName.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = rawName.trim().toLowerCase();
+        String qualified = normalized.contains(":") ? normalized : "minecraft:" + normalized;
+        net.minecraft.resources.Identifier id = Identifier.tryParse(qualified);
+        if (id == null) {
+            return Optional.empty();
+        }
+        boolean exists = level.registryAccess()
+                .lookupOrThrow(net.minecraft.core.registries.Registries.BIOME)
+                .getOptional(id).isPresent();
+        return exists ? Optional.of(qualified) : Optional.empty();
+    }
+
+    /** UC-08: travel to and verify a named biome. */
+    public String explore(ServerPlayer player, String rawBiomeName) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
+            }
+            String targetBiome = resolveBiome(player.level(), rawBiomeName)
+                    .orElseThrow(() -> new IllegalArgumentException("invalid biome"));
+            com.bhautik.mcagent.world.BiomeSensor biomeAt = () ->
+                    player.level().getBiome(player.blockPosition()).unwrapKey()
+                            .map(key -> key.identifier().toString()).orElse("");
+            ExploreGoal goal = new ExploreGoal(
+                    rawBiomeName.trim().toLowerCase(),
+                    () -> targetBiome.equals(biomeAt.current()));
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            goalManager.register(goal);
+            if (goal.status() == GoalStatus.SUCCESS) {
+                McAgent.LOGGER.info("[Agent] Goal completed immediately: {}", goal.title());
+                return goal.progressReport();
+            }
+            ActiveRun activeRun = new ActiveRun(goal, null, player.getUUID(), 0,
+                    snapshot(player), player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            activeRun.exploreTargetBiome = targetBiome;
+            activeRun.biomeAt = biomeAt;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            var started = executor.pollFinished();
+            if (started.isPresent()) {
+                ActiveRun failedRun = run;
+                run = null;
+                failedRun.goal.markFailed(started.get().failureReason());
+                McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
+                        failedRun.goal.title(), failedRun.goal.failureReason());
+                return failedRun.goal.progressReport();
+            }
+            return goal.progressReport()
+                    + System.lineSeparator() + "Agent is exploring. Use /agent goal for progress.";
         }
     }
 
@@ -131,9 +208,16 @@ public final class GoalService {
                 abandonRun("player left the server");
                 return;
             }
-            executor.tick();
 
             run.tickCount++;
+            if (run.tickCount % SURVIVAL_CHECK_INTERVAL_TICKS == 0) {
+                handleSurvival(run, player);
+            }
+            if (run == null) {
+                return;
+            }
+            executor.tick();
+
             if (run.tickCount % PROGRESS_REFRESH_INTERVAL_TICKS == 0) {
                 refreshSnapshot(player);
             }
@@ -142,20 +226,55 @@ public final class GoalService {
         }
     }
 
+    /**
+     * Survival outranks the active goal (PRD 15): on emergency the
+     * current action is paused and re-queued, and a recovery step jumps
+     * the queue. When it succeeds, the original action relaunches fresh.
+     */
+    private void handleSurvival(ActiveRun activeRun, ServerPlayer player) {
+        Threat threat = activeRun.survivalMonitor.assess();
+        if (!threat.emergency() || activeRun.recovering || activeRun.securingFood) {
+            // While gathering emergency food the interruption system
+            // stands down — otherwise it would suspend the very steps
+            // that fetch the food.
+            return;
+        }
+        AgentAction suspended = executor.suspendCurrent(threat.reason());
+        if (suspended != null) {
+            activeRun.queue.addFirst(suspended);
+        }
+        activeRun.queue.addFirst(new RecoverAction(activeRun.survivalMonitor,
+                VanillaSurvivalMonitor.feeder(player)));
+        activeRun.recovering = true;
+        McAgent.LOGGER.warn("[Recovery] Survival interrupt ({}); recovering before resuming",
+                threat.reason());
+        launchNextAction();
+    }
+
     private void handleFinishedAction(ServerPlayer player, AgentAction finished) {
         ActiveRun activeRun = run;
         if (activeRun == null) {
             return;
         }
         refreshSnapshot(player);
-        int current = activeRun.snapshot.count(activeRun.item);
+        int current = activeRun.item == null ? 0
+                : activeRun.snapshot.count(activeRun.item);
         // Reality first (PRD 14): if the goal is already satisfied, no
         // failure below matters.
-        if (finished.status() != ActionStatus.CANCELLED && current >= activeRun.requested) {
+        if (finished.status() != ActionStatus.CANCELLED && isSatisfied(activeRun, current)) {
             activeRun.goal.markSuccess();
             McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
             run = null;
             return;
+        }
+        if (finished instanceof RecoverAction) {
+            activeRun.recovering = false;
+            if (finished.status() == ActionStatus.SUCCESS) {
+                activeRun.needsEmergencyFood = false;
+                activeRun.securingFood = false;
+            }
+            McAgent.LOGGER.info("[Recovery] Survival step finished ({}); resuming plan",
+                    finished.status().toString().toLowerCase());
         }
         switch (finished.status()) {
             case CANCELLED -> {
@@ -164,6 +283,14 @@ public final class GoalService {
             case FAILED -> {
                 McAgent.LOGGER.warn("[Recovery] Action failed: {} ({})",
                         finished.title(), finished.failureReason());
+                if (finished instanceof RecoverAction
+                        && String.valueOf(finished.failureReason())
+                                .contains(com.bhautik.mcagent.action.RecoverAction.NO_FOOD_MARKER)) {
+                    // Starving with empty pockets: the next plan gathers
+                    // emergency food before trying to recover again.
+                    activeRun.needsEmergencyFood = true;
+                    McAgent.LOGGER.info("[Recovery] No food in inventory; planning foraged meals");
+                }
                 if (finished.bestEffort()) {
                     // Cleanup steps never cost an attempt or sink the goal.
                     McAgent.LOGGER.info("[Recovery] Best-effort step failed; continuing: {}",
@@ -186,11 +313,19 @@ public final class GoalService {
         } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
             McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
         } else {
-            activeRun.goal.markFailed(
-                    "verified inventory has " + current + "/" + activeRun.requested
+            activeRun.goal.markFailed(activeRun.exploreTargetBiome != null
+                    ? "target biome not reached after all attempts"
+                    : "verified inventory has " + current + "/" + activeRun.requested
                             + " after all attempts");
             run = null;
         }
+    }
+
+    /** Goal completion against live state, for items and exploration. */
+    private boolean isSatisfied(ActiveRun activeRun, int current) {
+        return activeRun.exploreTargetBiome != null
+                ? activeRun.exploreTargetBiome.equals(activeRun.biomeAt.current())
+                : current >= activeRun.requested;
     }
 
     private boolean runQueueIsEmpty(ActiveRun activeRun) {
@@ -199,6 +334,9 @@ public final class GoalService {
 
     /** Plans from scratch and fills the run's action queue. */
     private boolean replan(ActiveRun activeRun) {
+        // Reset pipeline flags first; planFor re-secures food if needed.
+        activeRun.recovering = false;
+        activeRun.securingFood = false;
         List<AgentAction> actions = planFor(activeRun);
         if (actions.isEmpty()) {
             return false;
@@ -222,6 +360,15 @@ public final class GoalService {
         if (player == null) {
             return List.of();
         }
+        if (activeRun.exploreTargetBiome != null) {
+            // M9: one open-ended explore step; verification is live biome.
+            net.minecraft.core.BlockPos center = player.blockPosition();
+            McAgent.LOGGER.info("[Planner] Plan generated: [Explore to {}]",
+                    activeRun.exploreTargetBiome.replaceFirst("^minecraft:", ""));
+            return List.of(new com.bhautik.mcagent.action.ExploreAction(
+                    activeRun.exploreTargetBiome, center.getX(), center.getZ(),
+                    activeRun.biomeAt::current, executor.baritoneIntegration()));
+        }
         int current = activeRun.snapshot.count(activeRun.item);
         activeRun.snapshot.setCount(activeRun.item, current);
         try {
@@ -242,7 +389,15 @@ public final class GoalService {
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
                             com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
                             com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
-                    (x, y, z) -> player.distanceToSqr(x, y, z));
+                    (x, y, z) -> player.distanceToSqr(x, y, z),
+                    com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
+                            com.bhautik.mcagent.planner.Planner.TORCH_ITEM),
+                    () -> player.level().getBiome(player.blockPosition()).unwrapKey()
+                            .map(key -> key.identifier().toString()).orElse(""),
+                    new com.bhautik.mcagent.world.PositionAnchor() {
+                        @Override public int x() { return player.blockPosition().getX(); }
+                        @Override public int z() { return player.blockPosition().getZ(); }
+                    });
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
@@ -252,6 +407,18 @@ public final class GoalService {
                     environment,
                     activeRun.item.id(),
                     activeRun.requested);
+            if (activeRun.needsEmergencyFood) {
+                List<AgentAction> forage = forageEmergencyFood(environment);
+                if (!forage.isEmpty()) {
+                    // Food first; the interruption system stands down
+                    // (securingFood) until the recovery step consumes it.
+                    actions.addAll(0, forage);
+                    actions.add(new RecoverAction(activeRun.survivalMonitor,
+                            VanillaSurvivalMonitor.feeder(player)));
+                    activeRun.securingFood = true;
+                }
+                activeRun.needsEmergencyFood = false;
+            }
             if (actions.isEmpty()) {
                 activeRun.goal.markFailed(
                         "no supported acquisition strategy for " + activeRun.item.id());
@@ -264,6 +431,36 @@ public final class GoalService {
             activeRun.goal.markFailed(planningFailure.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Plans gathering the first resolvable emergency food (berries,
+     * mushrooms). Empty when none of the candidates can be resolved.
+     */
+    private List<AgentAction> forageEmergencyFood(
+            com.bhautik.mcagent.planner.Planner.Environment environment) {
+        ActiveRun activeRun = run;
+        var countsNow = InventoryState.collect(
+                activeRun.server.getPlayerList().getPlayer(activeRun.playerId)).itemCounts();
+        for (String foodId : EMERGENCY_FOODS) {
+            try {
+                List<AgentAction> plan = executor.planner().planAcquisition(
+                        new VanillaRecipeResolver(activeRun.server,
+                                com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
+                        id -> countsNow.getOrDefault(id, 0),
+                        countsNow.keySet(),
+                        itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                        environment, foodId, EMERGENCY_FOOD_COUNT);
+                if (!plan.isEmpty()) {
+                    McAgent.LOGGER.info("[Planner] Emergency food plan: {}",
+                            plan.stream().map(AgentAction::title).toList());
+                    return plan;
+                }
+            } catch (com.bhautik.mcagent.planner.Planner.PlanningException ignored) {
+                // try the next candidate food
+            }
+        }
+        return List.of();
     }
 
     private String finishWithFailure(ActiveRun activeRun) {
@@ -289,8 +486,8 @@ public final class GoalService {
 
     private void refreshSnapshot(ServerPlayer player) {
         ActiveRun activeRun = run;
-        if (activeRun == null) {
-            return;
+        if (activeRun == null || activeRun.item == null) {
+            return; // exploration runs track biomes, not item counts
         }
         activeRun.snapshot.setCount(activeRun.item, liveCount(player, activeRun));
     }
@@ -323,24 +520,37 @@ public final class GoalService {
     }
 
     private static final class ActiveRun {
-        final GetItemGoal goal;
+        final AgentGoal goal;
         final Deque<AgentAction> queue = new ArrayDeque<>();
         final MinecraftItem item;
         final UUID playerId;
         final int requested;
         final dev.minecraftai.agent.world.InventoryState snapshot;
         final MinecraftServer server;
+        final com.bhautik.mcagent.survival.SurvivalMonitor survivalMonitor;
         int attempts;
         long tickCount;
+        /** True while a survival recovery step is in the pipeline. */
+        boolean recovering;
+        /** Set when a recovery starved; next plan gathers food first. */
+        boolean needsEmergencyFood;
+        /** True while the queue works through gathered emergency food. */
+        boolean securingFood;
+        /** Non-null for exploration runs (M9): the qualified biome id. */
+        String exploreTargetBiome;
+        /** Live biome under the agent, wired only for exploration runs. */
+        com.bhautik.mcagent.world.BiomeSensor biomeAt;
 
-        ActiveRun(GetItemGoal goal, MinecraftItem item, UUID playerId, int requested,
-                  dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server) {
+        ActiveRun(AgentGoal goal, MinecraftItem item, UUID playerId, int requested,
+                  dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,
+                  com.bhautik.mcagent.survival.SurvivalMonitor survivalMonitor) {
             this.goal = goal;
             this.item = item;
             this.playerId = playerId;
             this.requested = requested;
             this.snapshot = snapshot;
             this.server = server;
+            this.survivalMonitor = survivalMonitor;
         }
     }
 }

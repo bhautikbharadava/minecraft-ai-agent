@@ -18,6 +18,14 @@ public interface AgentAction {
     /** Requests safe cancellation; must leave the world in a consistent state. */
     void cancel();
 
+    /**
+     * Stops external effects (e.g. in-flight navigation) while keeping
+     * state, so survival handling can suspend and later re-launch the
+     * action. Unlike {@link #cancel()} the action stays non-terminal.
+     */
+    default void pause() {
+    }
+
     /** Human-readable reason when status() is FAILED, otherwise null. */
     String failureReason();
 

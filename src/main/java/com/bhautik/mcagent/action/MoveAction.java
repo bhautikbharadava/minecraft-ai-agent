@@ -102,6 +102,11 @@ public final class MoveAction implements AgentAction {
     }
 
     @Override
+    public void pause() {
+        backend.stop();
+    }
+
+    @Override
     public void cancel() {
         if (!status.terminal()) {
             backend.stop();
