@@ -86,6 +86,10 @@ Implemented:
   crafts the stone pickaxe. If even that chain is unresolvable (e.g.
   diamonds needing an iron pickaxe while iron requires smelting), the
   refusal explains exactly which link failed.
+- **Structure discovery (M9):** `/agent explore village` locates the
+  nearest tagged structure via vanilla world lookup and walks there —
+  arrival verified against live distance. Also searchable: mineshaft,
+  stronghold, shipwreck, ruined_portal, buried_treasure.
 - **Biome-gated gathering:** biome-locked resources chain exploration
   automatically — `/agent get cactus 8` from a plains start plans
   `[Explore to desert, Mine cactus]`, skipping the travel step when

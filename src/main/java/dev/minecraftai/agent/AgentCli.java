@@ -539,6 +539,17 @@ public final class AgentCli {
             throw new IllegalStateException("mining must poll the tunnel lighter");
         }
 
+        // Structure directory: friendly names resolve to vanilla tags.
+        assertContains(String.valueOf(
+                com.bhautik.mcagent.world.StructureDirectory.tagFor("village").orElseThrow()),
+                "village");
+        assertContains(String.valueOf(com.bhautik.mcagent.world.StructureDirectory
+                .tagFor("stronghold").orElseThrow()), "eye_of_ender_located");
+        if (com.bhautik.mcagent.world.StructureDirectory.isSearchable("not_a_thing")
+                || com.bhautik.mcagent.world.StructureDirectory.isSearchable(null)) {
+            throw new IllegalStateException("unknown structures must not be searchable");
+        }
+
         // Biome-gated gathering chains exploration before the dig, and
         // skips it entirely when already standing in the right biome.
         String[] currentBiome = {"minecraft:plains"};
