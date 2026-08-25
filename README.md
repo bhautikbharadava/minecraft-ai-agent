@@ -86,8 +86,14 @@ Implemented:
   crafts the stone pickaxe. If even that chain is unresolvable (e.g.
   diamonds needing an iron pickaxe while iron requires smelting), the
   refusal explains exactly which link failed.
+- **Biome-gated gathering:** biome-locked resources chain exploration
+  automatically — `/agent get cactus 8` from a plains start plans
+  `[Explore to desert, Mine cactus]`, skipping the travel step when
+  already standing in the right biome. Gated today: cactus (desert),
+  bamboo (jungle), sweet berries (taiga), red sand (badlands),
+  snowballs (snowy plains).
 
-Not implemented yet: survival interruptions, exploration goals, LLM
+Not implemented yet: structure discovery, cave exploration, LLM
 integration, or farms.
 
 ### Execution backend

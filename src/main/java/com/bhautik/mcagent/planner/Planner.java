@@ -11,8 +11,10 @@ import com.bhautik.mcagent.crafting.RecipeResolver;
 import com.bhautik.mcagent.crafting.SmeltingResolver;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
+import com.bhautik.mcagent.world.BiomeSensor;
 import com.bhautik.mcagent.world.BlockLocator;
 import com.bhautik.mcagent.world.DistanceSensor;
+import com.bhautik.mcagent.world.PositionAnchor;
 import com.bhautik.mcagent.action.TunnelLighter;
 
 import java.util.ArrayList;
@@ -68,7 +70,8 @@ public final class Planner {
     /**
      * Execution seams handed to emitted actions: real grid crafting,
      * real furnace cooking, real block placement and collection, world
-     * checks that verify all of it, and continuous tunnel lighting.
+     * checks that verify all of it, continuous tunnel lighting, and the
+     * live biome/anchor used to chain exploration for gated resources.
      */
     public record Environment(CraftAction.Crafter crafter,
                               SmeltAction.Smelter smelter,
@@ -79,7 +82,9 @@ public final class Planner {
                               BlockLocator tableLocator,
                               BlockLocator furnaceLocator,
                               DistanceSensor distanceSensor,
-                              TunnelLighter tunnelLighter) {
+                              TunnelLighter tunnelLighter,
+                              BiomeSensor biomeSensor,
+                              PositionAnchor anchor) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -183,6 +188,15 @@ public final class Planner {
                 if (toolReason != null) {
                     planMissingTool(itemId, toolReason);
                 }
+                // Biome-locked sources require standing in their biome
+                // first; exploration is just another dependency step.
+                DirectAcquisitions.requiredBiomeFor(itemId).ifPresent(required -> {
+                    if (!required.equals(environment.biomeSensor().current())) {
+                        plan.add(new com.bhautik.mcagent.action.ExploreAction(required,
+                                environment.anchor().x(), environment.anchor().z(),
+                                environment.biomeSensor()::current, baritoneIntegration));
+                    }
+                });
                 // Hold the right tier while mining: wrong-tool breaks
                 // destroy gated ores without dropping anything.
                 String toolToHold = DirectAcquisitions

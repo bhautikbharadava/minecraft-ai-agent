@@ -538,6 +538,36 @@ public final class AgentCli {
         if (lightTicks[0] == 0) {
             throw new IllegalStateException("mining must poll the tunnel lighter");
         }
+
+        // Biome-gated gathering chains exploration before the dig, and
+        // skips it entirely when already standing in the right biome.
+        String[] currentBiome = {"minecraft:plains"};
+        List<AgentAction> cactusPlan = planner.planAcquisition(resolver,
+                torchStocked(), Set.of(), id -> 0,
+                env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
+                        output -> Optional.empty(),
+                        () -> currentBiome[0], 12, 34),
+                "minecraft:cactus", 4);
+        assertEquals(cactusPlan.get(0).getClass(),
+                com.bhautik.mcagent.action.ExploreAction.class,
+                "cactus in plains starts with exploration");
+        assertContains(cactusPlan.get(0).title(), "desert");
+        assertEquals(cactusPlan.get(1).getClass(), MineAction.class,
+                "then mines the gated source");
+        com.bhautik.mcagent.action.ExploreAction walk =
+                (com.bhautik.mcagent.action.ExploreAction) cactusPlan.get(0);
+        walk.start();
+        assertEquals(walk.status(), ActionStatus.RUNNING, "explore runs while away");
+
+        currentBiome[0] = "minecraft:desert";
+        List<AgentAction> localCactusPlan = planner.planAcquisition(resolver,
+                torchStocked(), Set.of(), id -> 0,
+                env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
+                        output -> Optional.empty(),
+                        () -> currentBiome[0], 12, 34),
+                "minecraft:cactus", 4);
+        assertEquals(localCactusPlan.get(0).getClass(), MineAction.class,
+                "already-in-biome digs immediately");
     }
 
     /** Builds a planner environment around a given world-block state. */
@@ -552,6 +582,16 @@ public final class AgentCli {
             CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
             com.bhautik.mcagent.world.BlockLocator locator,
             com.bhautik.mcagent.crafting.SmeltingResolver smelting) {
+        return env(crafter, placer, locator, smelting,
+                () -> "minecraft:plains", 5, 7);
+    }
+
+    /** Environment variant with a controllable biome and anchor. */
+    private static com.bhautik.mcagent.planner.Planner.Environment env(
+            CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
+            com.bhautik.mcagent.world.BlockLocator locator,
+            com.bhautik.mcagent.crafting.SmeltingResolver smelting,
+            java.util.function.Supplier<String> biome, int anchorX, int anchorZ) {
         return new com.bhautik.mcagent.planner.Planner.Environment(
                 crafter,
                 okSmelter(),
@@ -565,7 +605,12 @@ public final class AgentCli {
                 },
                 smelting,
                 locator, locator, (x, y, z) -> 100.0,
-                () -> false);
+                () -> false,
+                biome::get,
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    @Override public int x() { return anchorX; }
+                    @Override public int z() { return anchorZ; }
+                });
     }
 
     /** A smelter that always reports success. */

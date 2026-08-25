@@ -391,7 +391,13 @@ public final class GoalService {
                             com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                     (x, y, z) -> player.distanceToSqr(x, y, z),
                     com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
-                            com.bhautik.mcagent.planner.Planner.TORCH_ITEM));
+                            com.bhautik.mcagent.planner.Planner.TORCH_ITEM),
+                    () -> player.level().getBiome(player.blockPosition()).unwrapKey()
+                            .map(key -> key.identifier().toString()).orElse(""),
+                    new com.bhautik.mcagent.world.PositionAnchor() {
+                        @Override public int x() { return player.blockPosition().getX(); }
+                        @Override public int z() { return player.blockPosition().getZ(); }
+                    });
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
