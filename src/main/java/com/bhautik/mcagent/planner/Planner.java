@@ -55,8 +55,10 @@ public final class Planner {
     public static final String FUEL_ITEM = "minecraft:coal";
     /** Lighting carried for tunnel safety (mob-spawn prevention). */
     public static final String TORCH_ITEM = "minecraft:torch";
-    /** Mining plans top torches back up to this many first. */
-    public static final int MIN_TORCHES = 8;
+    /** Mining plans trigger a torch top-up when stock drops below this. */
+    public static final int MIN_TORCHES = 16;
+    /** Top-ups fill a full stack so long digs never run dark. */
+    public static final int TORCH_STACK_TARGET = 64;
 
     /** How far the agent will walk to reach an existing utility block. */
     public static final int BLOCK_SEARCH_RADIUS = 48;
@@ -121,7 +123,7 @@ public final class Planner {
             Expansion torchRun = new Expansion(resolver, plannedCounts, ownedItemIds,
                     liveCounts, environment);
             try {
-                torchRun.expand(TORCH_ITEM, MIN_TORCHES - carriedTorches);
+                torchRun.expand(TORCH_ITEM, TORCH_STACK_TARGET - carriedTorches);
                 plan.addAll(0, torchRun.plan);
                 com.bhautik.mcagent.McAgent.LOGGER.info(
                         "[Planner] Torch upkeep prepended (plan now {} steps)", plan.size());

@@ -71,9 +71,10 @@ Implemented:
   outward through Baritone's explore process until the live biome
   sensor reports arrival — verified independently, with re-issue on
   stalls and an honest failure when the budget runs out.
-- **Torch lighting (survival prevention):** mining plans top torches
-  up to 8 first (coal + sticks resolve through the normal planner),
-  and every mining step is followed by a best-effort `Light area`
+- **Torch lighting (survival prevention):** mining plans keep a full
+  stack of 64 torches — whenever stock drops below 16, the planner
+  prepends the whole coal + sticks chain before any digging — and
+  every mining step is followed by a best-effort `Light area`
   action that drops a torch whenever the agent stands below light
   level 8 — keeping tunnels unspawnable instead of reacting to the
   mobs afterwards.
