@@ -6,6 +6,7 @@ import dev.minecraftai.agent.item.ItemRegistry;
 import dev.minecraftai.agent.item.MinecraftItem;
 import dev.minecraftai.agent.world.InventoryState;
 
+import java.util.List;
 import java.util.Optional;
 
 public final class AgentCommandHandler {
@@ -44,9 +45,29 @@ public final class AgentCommandHandler {
     }
 
     private String get(String itemName, String countText) {
+        if (com.bhautik.mcagent.item.Kits.isKit(itemName)) {
+            int kitCount;
+            try {
+                kitCount = Integer.parseInt(countText);
+            } catch (NumberFormatException exception) {
+                return "Invalid count: " + countText + " (must be a positive integer)";
+            }
+            if (kitCount <= 0) {
+                return "Invalid count: " + countText + " (must be greater than zero)";
+            }
+            List<dev.minecraftai.agent.item.MinecraftItem> pieces =
+                    com.bhautik.mcagent.item.Kits.itemsFor(itemName).orElseThrow().stream()
+                            .map(MinecraftItem::new).toList();
+            return goalManager.register(new dev.minecraftai.agent.goal.GetKitGoal(
+                    itemName.trim().toLowerCase(), pieces, kitCount,
+                    () -> pieces.stream().allMatch(
+                            piece -> inventoryState.count(piece) >= kitCount)))
+                    .progressReport();
+        }
         Optional<MinecraftItem> item = itemRegistry.resolve(itemName);
         if (item.isEmpty()) {
-            return "Invalid item name: " + itemName;
+            return "Invalid item name: " + itemName + " (known kits: "
+                    + com.bhautik.mcagent.item.Kits.names() + ")";
         }
         int count;
         try {

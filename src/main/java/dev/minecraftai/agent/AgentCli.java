@@ -539,6 +539,70 @@ public final class AgentCli {
             throw new IllegalStateException("mining must poll the tunnel lighter");
         }
 
+        // Furnace for the set test: 8 cobblestone in a 3x3 ring.
+        recipes.put("minecraft:furnace", tableRecipe("minecraft:furnace", 1,
+                cell("minecraft:cobblestone"), cell("minecraft:cobblestone"),
+                cell("minecraft:cobblestone"), cell("minecraft:cobblestone"),
+                SlotSpec.EMPTY, cell("minecraft:cobblestone"),
+                cell("minecraft:cobblestone"), cell("minecraft:cobblestone"),
+                cell("minecraft:cobblestone")));
+        // UC-09: multi-root plans pool shared dependencies - two chests
+        // and a furnace mine their total need once.
+        List<Map.Entry<String, Integer>> roots = List.of(
+                Map.entry("minecraft:chest", 2),
+                Map.entry("minecraft:furnace", 1));
+        List<AgentAction> setPlan = planner.planAcquisition(resolver,
+                torchStocked(), Set.of("minecraft:wooden_pickaxe"), id -> 0,
+                env(crafter, placer, blockNearby()), roots);
+        long stoneMines = setPlan.stream()
+                .filter(step -> step instanceof MineAction
+                        && step.title().contains("stone"))
+                .count();
+        assertEquals(stoneMines, 1L, "shared dependencies mined once");
+        // 16 chest planks + 8 furnace cobble... total stone demand:
+        int stoneTarget = 0;
+        for (AgentAction step : setPlan) {
+            if (step instanceof MineAction mine && mine.title().contains("stone")) {
+                stoneTarget += Integer.parseInt(mine.title()
+                        .replace("Mine ", "").replace(" stone", "").split(" ")[0]);
+            }
+        }
+        if (stoneTarget != 8) {
+            throw new IllegalStateException("total pooled demand: expected [8] got [" + stoneTarget
+                    + "] " + setPlan.stream().map(AgentAction::title).toList());
+        }
+
+        // Kit registry contents.
+        var ironPieces = com.bhautik.mcagent.item.Kits.itemsFor("iron_armor").orElseThrow();
+        assertEquals(ironPieces.size(), 4, "armor kits have four pieces");
+        if (!com.bhautik.mcagent.item.Kits.isKit("diamond_armor")
+                || com.bhautik.mcagent.item.Kits.isKit("netherite_armor")) {
+            throw new IllegalStateException("kit registry contents wrong");
+        }
+
+        // GetKitGoal lifecycle via live supplier.
+        dev.minecraftai.agent.world.InventoryState scratchInv =
+                new dev.minecraftai.agent.world.InventoryState();
+        var helmet = new dev.minecraftai.agent.item.MinecraftItem(
+                "minecraft:diamond_helmet");
+        var boots = new dev.minecraftai.agent.item.MinecraftItem(
+                "minecraft:diamond_boots");
+        dev.minecraftai.agent.goal.GetKitGoal kit =
+                new dev.minecraftai.agent.goal.GetKitGoal("partial", List.of(helmet, boots),
+                        1, () -> scratchInv.count(helmet) >= 1 && scratchInv.count(boots) >= 1);
+        kit.activate();
+        assertEquals(kit.status(), dev.minecraftai.agent.goal.GoalStatus.ACTIVE,
+                "incomplete kit stays active");
+        scratchInv.setCount(helmet, 1);
+        if (kit.status() != dev.minecraftai.agent.goal.GoalStatus.ACTIVE) {
+            throw new IllegalStateException("half-carried kit must remain active");
+        }
+        scratchInv.setCount(boots, 1);
+        kit.markSuccess();
+        assertEquals(kit.status(), dev.minecraftai.agent.goal.GoalStatus.SUCCESS,
+                "full kit completes");
+        assertContains(kit.progressReport(), "diamond_helmet");
+
         // Structure directory: friendly names resolve to vanilla tags.
         assertContains(String.valueOf(
                 com.bhautik.mcagent.world.StructureDirectory.tagFor("village").orElseThrow()),

@@ -87,6 +87,10 @@ Implemented:
   crafts the stone pickaxe. If even that chain is unresolvable (e.g.
   diamonds needing an iron pickaxe while iron requires smelting), the
   refusal explains exactly which link failed.
+- **Armor/tool kits (UC-09):** `/agent get diamond_armor 1` expands to
+  all four pieces planned as ONE goal - shared dependencies (the total
+  diamond count) are pooled and gathered once instead of four
+  independent ladders. Kits: iron/diamond armor, iron/diamond tools.
 - **Structure discovery (M9):** `/agent explore village` locates the
   nearest tagged structure via vanilla world lookup and walks there —
   arrival verified against live distance. Also searchable: mineshaft,

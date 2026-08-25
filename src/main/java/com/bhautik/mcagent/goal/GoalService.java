@@ -13,6 +13,7 @@ import com.bhautik.mcagent.survival.Threat;
 import dev.minecraftai.agent.goal.AgentGoal;
 import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.goal.ExploreGoal;
+import dev.minecraftai.agent.goal.GetKitGoal;
 import dev.minecraftai.agent.goal.GetItemGoal;
 import dev.minecraftai.agent.goal.GoalStatus;
 import dev.minecraftai.agent.item.ItemRegistry;
@@ -88,18 +89,45 @@ public final class GoalService {
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
             }
-            MinecraftItem item = resolve(rawItemName).orElseThrow();
+            Optional<MinecraftItem> itemOpt = resolve(rawItemName);
             dev.minecraftai.agent.world.InventoryState snapshot = snapshot(player);
-            GetItemGoal goal = new GetItemGoal(item, requestedCount, snapshot);
-            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
-            goalManager.register(goal);
-            if (goal.status() == GoalStatus.SUCCESS) {
-                McAgent.LOGGER.info("[Agent] Goal completed immediately: {}", goal.title());
-                return goal.progressReport();
+            ActiveRun activeRun;
+            AgentGoal goal;
+            if (itemOpt.isPresent()) {
+                GetItemGoal itemGoal = new GetItemGoal(itemOpt.get(), requestedCount, snapshot);
+                goal = itemGoal;
+                McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+                goalManager.register(goal);
+                if (goal.status() == GoalStatus.SUCCESS) {
+                    McAgent.LOGGER.info("[Agent] Goal completed immediately: {}", goal.title());
+                    return goal.progressReport();
+                }
+                activeRun = new ActiveRun(itemGoal, itemOpt.get(), player.getUUID(),
+                        requestedCount, snapshot, player.level().getServer(),
+                        com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            } else {
+                List<MinecraftItem> pieces = com.bhautik.mcagent.item.Kits
+                        .itemsFor(rawItemName)
+                        .orElseThrow(() -> new IllegalArgumentException("invalid item or kit"))
+                        .stream().map(MinecraftItem::new).toList();
+                GetKitGoal kitGoal = new GetKitGoal(rawItemName.trim().toLowerCase(),
+                        pieces, requestedCount,
+                        () -> pieces.stream().allMatch(piece ->
+                                liveCountById(player.level().getServer(), player.getUUID(),
+                                        piece.id()) >= requestedCount));
+                goal = kitGoal;
+                McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+                goalManager.register(goal);
+                if (goal.status() == GoalStatus.SUCCESS) {
+                    McAgent.LOGGER.info("[Agent] Goal completed immediately: {}", goal.title());
+                    return goal.progressReport();
+                }
+                activeRun = new ActiveRun(kitGoal, null, player.getUUID(), requestedCount,
+                        snapshot, player.level().getServer(),
+                        com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+                activeRun.kitItems = pieces;
             }
-            run = new ActiveRun(goal, item, player.getUUID(), requestedCount,
-                    snapshot, player.level().getServer(),
-                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            run = activeRun;
             if (!replan(run)) {
                 return finishWithFailure(run);
             }
@@ -107,12 +135,12 @@ public final class GoalService {
             // instead of promising work that already ended.
             var started = executor.pollFinished();
             if (started.isPresent()) {
-                ActiveRun activeRun = run;
+                ActiveRun failedRun = run;
                 run = null;
-                activeRun.goal.markFailed(started.get().failureReason());
+                failedRun.goal.markFailed(started.get().failureReason());
                 McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
-                        activeRun.goal.title(), activeRun.goal.failureReason());
-                return activeRun.goal.progressReport();
+                        failedRun.goal.title(), failedRun.goal.failureReason());
+                return failedRun.goal.progressReport();
             }
             return goal.progressReport()
                     + System.lineSeparator() + "Agent is working. Use /agent goal for progress.";
@@ -387,6 +415,11 @@ public final class GoalService {
 
     /** Goal completion against live state, for items and exploration. */
     private boolean isSatisfied(ActiveRun activeRun, int current) {
+        if (activeRun.kitItems != null) {
+            return activeRun.kitItems.stream().allMatch(piece ->
+                    liveCountById(activeRun.server, activeRun.playerId, piece.id())
+                            >= activeRun.requested);
+        }
         if (activeRun.exploreTargetBiome != null) {
             return activeRun.exploreTargetBiome.equals(activeRun.biomeAt.current());
         }
@@ -428,6 +461,22 @@ public final class GoalService {
         ServerPlayer player = activeRun.server.getPlayerList().getPlayer(activeRun.playerId);
         if (player == null) {
             return List.of();
+        }
+        if (activeRun.kitItems != null) {
+            var countsNow = InventoryState.collect(player).itemCounts();
+            List<Map.Entry<String, Integer>> roots = activeRun.kitItems.stream()
+                    .map(piece -> Map.entry(piece.id(), activeRun.requested))
+                    .toList();
+            List<AgentAction> actions = executor.planner().planAcquisition(
+                    environmentFor(activeRun, player, countsNow).resolver(),
+                    id -> countsNow.getOrDefault(id, 0),
+                    countsNow.keySet(),
+                    itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                    environmentFor(activeRun, player, countsNow),
+                    roots);
+            McAgent.LOGGER.info("[Planner] Kit plan generated: {}",
+                    actions.stream().map(AgentAction::title).toList());
+            return actions;
         }
         if (activeRun.exploreTargetBiome != null) {
             // M9: one open-ended explore step; verification is live biome.
@@ -624,6 +673,8 @@ public final class GoalService {
         boolean needsEmergencyFood;
         /** True while the queue works through gathered emergency food. */
         boolean securingFood;
+        /** Non-null for kit runs (UC-09): every piece must be carried. */
+        List<MinecraftItem> kitItems;
         /** Non-null for exploration runs (M9): the qualified biome id. */
         String exploreTargetBiome;
         /** Live biome under the agent, wired only for exploration runs. */

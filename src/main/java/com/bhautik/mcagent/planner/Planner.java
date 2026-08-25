@@ -114,9 +114,26 @@ public final class Planner {
                                              Environment environment,
                                              String itemId,
                                              int targetCount) {
+        return planAcquisition(resolver, plannedCounts, ownedItemIds, liveCounts,
+                environment, List.of(Map.entry(itemId, targetCount)));
+    }
+
+    /**
+     * Multi-root planning (PRD UC-09): all roots share one Expansion, so
+     * a full armor set mines its total diamond need once instead of four
+     * independent ladders re-gathering the same intermediates.
+     */
+    public List<AgentAction> planAcquisition(RecipeResolver resolver,
+                                             Function<String, Integer> plannedCounts,
+                                             Set<String> ownedItemIds,
+                                             ToIntFunction<String> liveCounts,
+                                             Environment environment,
+                                             List<Map.Entry<String, Integer>> roots) {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
-        expansion.expand(itemId, targetCount);
+        for (Map.Entry<String, Integer> root : roots) {
+            expansion.expand(root.getKey(), root.getValue());
+        }
         List<AgentAction> plan = new ArrayList<>(expansion.plan);
         // Torch upkeep (PRD 15 background tier): mining plans top torches
         // back up first, when the recipe resolves and stock is low.
