@@ -17,7 +17,9 @@ Summary of what works today:
 - **UC-09 kits**: `iron_armor`, `diamond_armor`, `iron_tools`,
   `diamond_tools` planned as one pooled goal
 - **Survival**: interrupts for health/hunger/oxygen (eat / forage /
-  surface), torch upkeep (full stack) with continuous tunnel lighting
+  surface), torch upkeep (full stack) with continuous tunnel lighting,
+  melee combat v0 - engages hostiles in reach with the best carried
+  sword
 - **Exploration**: biome travel, structure discovery (village, mineshaft,
   stronghold, ...), biome-gated resources auto-chain exploration
 - **Base camp**: anchor + chest + table; stash commands and an automatic

@@ -77,7 +77,7 @@ master.
 ## Known limitations
 
 - Water crossings are swim-only; boat sailing was scrapped (see decisions)
-- No combat: agent is passive toward mobs (eats/waits instead of fighting)
+- Combat is melee-only v0 (no bow/shield/flee); agent strikes nearby hostiles
 - Enchanting entirely unsupported (XP, table use, book/leather chain)
 - Netherite unreachable (smithing + nether not implemented)
 - Auto-restock before goals is command-driven only (`/agent restock`);
@@ -96,7 +96,7 @@ master.
 |---|---|---|---|---|
 | 1 | Restock from base | `/agent restock torches\|food\|<item> [count]` | S | ✅ |
 | 2 | Base persistence | BaseSavedState via overworld SavedDataStorage | S | ✅ |
-| 3 | Combat v0 | AttackAction + flee-on-sustained-damage (M8 leftover) | M | ⬜ |
+| 3 | Combat v0 | melee engage of nearby hostiles with best sword; flee still future | M | ✅ v0 |
 | 4 | Proactive food economy | cook hunted meat via furnace pipeline; berry upkeep | M | ⬜ |
 | 5 | M10 Building foundation | blueprint placement + structure verification | M-L | ⬜ |
 | 6 | Kit expansion | gold/mixed kits ("starter kit") | S | ⬜ |

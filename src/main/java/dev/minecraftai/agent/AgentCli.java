@@ -908,6 +908,18 @@ public final class AgentCli {
             throw new IllegalStateException("chest position lost in roundtrip");
         }
 
+        // Combat v0 sword preference: best tier carried wins; bare hands
+        // return empty (punching is a last resort, not a plan).
+        var best = DirectAcquisitions.bestSwordFor(java.util.Set.of(
+                "minecraft:wooden_sword", "minecraft:diamond_sword",
+                "minecraft:iron_pickaxe"));
+        assertEquals(best.orElseThrow(), "minecraft:diamond_sword",
+                "highest-tier sword carried is chosen");
+        if (DirectAcquisitions.bestSwordFor(java.util.Set.of(
+                "minecraft:iron_pickaxe", "minecraft:bread")).isPresent()) {
+            throw new IllegalStateException("no sword means no sword");
+        }
+
         // Suspension pauses without cancelling: the action comes back
         // re-launchable and the backend was told to stop.
         FakeBackend survivalBackend = new FakeBackend();

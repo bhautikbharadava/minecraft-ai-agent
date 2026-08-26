@@ -41,6 +41,8 @@ public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
     private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
+    /** Hostiles within this distance get engaged in melee (combat v0). */
+    private static final double COMBAT_RANGE = 4.0;
     /** Free hotbag slots below which the agent pauses to stash junk. */
     private static final int FREE_SLOT_THRESHOLD = 3;
     /** Items auto-stashed when dumping junk at the base chest. */
@@ -482,9 +484,23 @@ public final class GoalService {
 
             run.tickCount++;
             if (run.tickCount % SURVIVAL_CHECK_INTERVAL_TICKS == 0) {
-                handleSurvival(run, player);
+                // Combat first: swinging at a creeper outranks stashing.
+                boolean engaged = com.bhautik.mcagent.integration.VanillaCombat
+                        .attacker(player,
+                                com.bhautik.mcagent.integration.VanillaEquipment
+                                        .equipper(player))
+                        .strikeNearestHostile(COMBAT_RANGE);
+                if (engaged && run.combatTarget == null) {
+                    run.combatTarget = "hostile";
+                    McAgent.LOGGER.warn("[Combat] Engaging hostile near agent");
+                } else if (!engaged) {
+                    run.combatTarget = null;
+                }
                 if (run != null) {
-                    handleInventoryPressure(run, player);
+                    handleSurvival(run, player);
+                    if (run != null) {
+                        handleInventoryPressure(run, player);
+                    }
                 }
             }
             if (run == null) {
@@ -1034,6 +1050,8 @@ public final class GoalService {
         int restockMaxStacks;
         /** True while an auto-stash detour is in the pipeline. */
         boolean stashing;
+        /** Non-null while a hostile is being fought. */
+        String combatTarget;
 
         ActiveRun(AgentGoal goal, MinecraftItem item, UUID playerId, int requested,
                   dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,

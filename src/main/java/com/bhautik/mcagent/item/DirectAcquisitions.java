@@ -196,6 +196,26 @@ public final class DirectAcquisitions {
         };
     }
 
+
+    /**
+     * The best (highest-tier) sword carried, for combat. Empty when no
+     * sword is owned - punching works but is a last resort.
+     */
+    public static Optional<String> bestSwordFor(java.util.Set<String> ownedItemIds) {
+        return ownedItemIds.stream()
+                .filter(id -> id.endsWith("_sword"))
+                .min(java.util.Comparator.comparingInt(id -> switch (
+                        id.replaceFirst("^minecraft:", "")) {
+                    case "netherite_sword" -> 0;
+                    case "diamond_sword" -> 1;
+                    case "iron_sword" -> 2;
+                    case "stone_sword" -> 3;
+                    case "golden_sword" -> 4;
+                    case "wooden_sword" -> 5;
+                    default -> Integer.MAX_VALUE;
+                }));
+    }
+
     /** Exposed for JVM smoke checks. */
     public static Map<String, String> all() {
         return ACQUISITIONS.entrySet().stream()
