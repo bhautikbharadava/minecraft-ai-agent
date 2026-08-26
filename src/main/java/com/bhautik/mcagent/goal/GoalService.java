@@ -722,6 +722,10 @@ public final class GoalService {
         }
         if (activeRun.kitItems != null) {
             var countsNow = InventoryState.collect(player).itemCounts();
+            var baseSupplies = baseSuppliesFor(player);
+            for (var entry : baseSupplies.entrySet()) {
+                countsNow.merge(entry.getKey(), entry.getValue(), Integer::sum);
+            }
             List<Map.Entry<String, Integer>> roots = activeRun.kitItems.stream()
                     .map(piece -> Map.entry(piece.id(), activeRun.requested))
                     .toList();
@@ -732,6 +736,10 @@ public final class GoalService {
                     itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
                     environmentFor(activeRun, player, countsNow),
                     roots);
+            if (!baseSupplies.isEmpty()) {
+                actions.addAll(0, java.util.List.of(supplyWithdrawStep(player, baseSupplies)));
+                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", baseSupplies);
+            }
             McAgent.LOGGER.info("[Planner] Kit plan generated: {}",
                     actions.stream().map(AgentAction::title).toList());
             return actions;
@@ -806,6 +814,12 @@ public final class GoalService {
         activeRun.snapshot.setCount(activeRun.item, current);
         try {
             var countsNow = InventoryState.collect(player).itemCounts();
+            var baseSupplies = baseSuppliesFor(player);
+            // Items sitting in the base chest / furnace output count as
+            // owned: the plan mines only what storage cannot cover.
+            for (var entry : baseSupplies.entrySet()) {
+                countsNow.merge(entry.getKey(), entry.getValue(), Integer::sum);
+            }
             var environment = environmentFor(activeRun, player, countsNow);
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
@@ -816,6 +830,11 @@ public final class GoalService {
                     environment,
                     activeRun.item.id(),
                     activeRun.requested);
+            if (!baseSupplies.isEmpty()) {
+                actions.addAll(0, java.util.List.of(
+                        supplyWithdrawStep(player, baseSupplies)));
+                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", baseSupplies);
+            }
             if (activeRun.needsEmergencyFood) {
                 List<AgentAction> forage = forageEmergencyFood(environment);
                 if (!forage.isEmpty()) {
@@ -840,6 +859,26 @@ public final class GoalService {
             activeRun.goal.markFailed(planningFailure.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Items stored at the agent's feet - base chest contents plus any
+     * finished smelts still inside nearby furnace output slots. Empty
+     * when the agent is away from base.
+     */
+    private Map<String, Integer> baseSuppliesFor(ServerPlayer player) {
+        return com.bhautik.mcagent.integration.VanillaStorage.storedTotals(
+                player, com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS);
+    }
+
+    private AgentAction supplyWithdrawStep(ServerPlayer player,
+            Map<String, Integer> supplies) {
+        return new com.bhautik.mcagent.action.WithdrawAction(
+                "Collect from base storage",
+                List.copyOf(supplies.keySet()),
+                com.bhautik.mcagent.integration.VanillaStorage.supplyWithdrawer(
+                        player, com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS,
+                        supplies));
     }
 
     /** Builds the full execution seam bundle against live world state. */

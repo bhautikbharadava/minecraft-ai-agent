@@ -3,6 +3,7 @@ package com.bhautik.mcagent.integration;
 import com.bhautik.mcagent.action.DepositAction;
 
 import net.minecraft.core.BlockPos;
+import java.util.Map;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.item.ItemStack;
@@ -118,6 +119,88 @@ public final class VanillaStorage {
             }
         }
         return false;
+    }
+
+    /**
+     * Every usable storage container within reach: chests plus furnace
+     * output inventories (finished smelts waiting to be collected).
+     */
+    public static java.util.List<Container> nearbyContainers(
+            ServerPlayer player, int radius) {
+        java.util.List<Container> containers = new java.util.ArrayList<>();
+        BlockPos origin = player.blockPosition();
+        var level = player.level();
+        for (BlockPos pos : BlockPos.betweenClosed(
+                origin.offset(-radius, -radius, -radius),
+                origin.offset(radius, radius, radius))) {
+            var be = level.getBlockEntity(pos);
+            if (be instanceof RandomizableContainerBlockEntity chestContainer) {
+                containers.add(chestContainer);
+            } else if (be instanceof net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity furnace) {
+                containers.add(furnace);
+            }
+        }
+        return containers;
+    }
+
+    /** Per-item totals across every nearby container. */
+    public static Map<String, Integer> storedTotals(ServerPlayer player, int radius) {
+        Map<String, Integer> totals = new java.util.HashMap<>();
+        for (Container container : nearbyContainers(player, radius)) {
+            for (int slot = 0; slot < container.getContainerSize(); slot++) {
+                ItemStack stack = container.getItem(slot);
+                if (!stack.isEmpty()) {
+                    totals.merge(idOf(stack), stack.getCount(), Integer::sum);
+                }
+            }
+        }
+        return totals;
+    }
+
+    /**
+     * Pulls up to {@code unitCap} items per listed id out of nearby
+     * containers (chests plus furnace output slots).
+     */
+    public static com.bhautik.mcagent.action.WithdrawAction.Withdrawer supplyWithdrawer(
+            ServerPlayer player, int radius, Map<String, Integer> unitCapPerId) {
+        return (itemIds, maxStacks) -> {
+            int moved = 0;
+            for (Container container : nearbyContainers(player, radius)) {
+                for (int slot = 0; slot < container.getContainerSize()
+                        && moved < maxStacks; slot++) {
+                    ItemStack stack = container.getItem(slot);
+                    String id = idOf(stack);
+                    if (stack.isEmpty() || !itemIds.contains(id)) {
+                        continue;
+                    }
+                    int cap = unitCapPerId.getOrDefault(id, Integer.MAX_VALUE);
+                    int alreadyInBag = 0;
+                    var inv = player.getInventory();
+                    for (int bagSlot = 0; bagSlot < inv.getContainerSize(); bagSlot++) {
+                        if (idOf(inv.getItem(bagSlot)).equals(id)) {
+                            alreadyInBag += inv.getItem(bagSlot).getCount();
+                        }
+                    }
+                    int allowed = Math.min(stack.getCount(), Math.max(0, cap - alreadyInBag));
+                    if (allowed <= 0) {
+                        continue;
+                    }
+                    ItemStack take = stack.split(allowed);
+                    if (player.getInventory().add(take)) {
+                        if (stack.isEmpty()) {
+                            container.removeItem(slot, 0);
+                            container.setItem(slot, ItemStack.EMPTY);
+                        } else {
+                            container.setItem(slot, stack);
+                        }
+                        moved++;
+                    } else {
+                        stack.grow(take.getCount()); // bag full: give back
+                    }
+                }
+            }
+            return moved;
+        };
     }
 
     private static Container findChest(ServerPlayer player, int radius) {
