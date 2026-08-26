@@ -30,7 +30,9 @@ master.
 | M9 Exploration - structures | §17 M9 | ✅ Done | PR #9 |
 | M9 Exploration - caves | §17 M9 | ⬜ Backlog | - |
 | UC-09 Kits (armor/tool sets) | §16 UC-09 | ✅ Done | master |
-| Base camp + storage + auto-stash | (M11 groundwork) | ✅ Done (session-only) | master |
+| Base camp + storage + auto-stash | (M11 groundwork) | ✅ Done (persisted) | master |
+| Restock from base | `/agent restock torches/food/<item>` | ✅ Done | master |
+| Base-supply crediting in plans | goals started at base use stored items | ✅ Done | master |
 | M10 Building foundation | §17 M10 | ⬜ Backlog | - |
 | M11 Farm building | §16 UC-11, §17 M11 | ⬜ Backlog | - |
 | M12 Natural language | §18, §17 M12 | ⬜ Backlog | - |
