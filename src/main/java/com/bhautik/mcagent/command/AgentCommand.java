@@ -114,10 +114,18 @@ public final class AgentCommand {
 
     private static int runBase(CommandSourceStack source, GoalService goalService)
             throws CommandSyntaxException {
-        ServerPlayer player = source.getPlayerOrException();
-        String report = goalService.base(player);
-        source.sendSuccess(() -> Component.literal(report), false);
-        return 1;
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            String report = goalService.base(player);
+            source.sendSuccess(() -> Component.literal(report), false);
+            return 1;
+        } catch (Exception failure) {
+            com.bhautik.mcagent.McAgent.LOGGER.error("[Agent] /agent base failed",
+                    failure);
+            source.sendFailure(Component.literal("Base setup failed: "
+                    + failure));
+            return 0;
+        }
     }
 
     private static int stash(CommandSourceStack source, GoalService goalService,
