@@ -342,11 +342,6 @@ public final class GoalService {
                         .append(" ").append(existingChest.getY()).append(" ")
                         .append(existingChest.getZ());
             }
-            var tableResult = placer.place(
-                    com.bhautik.mcagent.planner.Planner.CRAFTING_TABLE_ITEM);
-            report.append(tableResult.success()
-                    ? "\nPlaced crafting table"
-                    : "\nNo crafting table placed: " + tableResult.failureReason());
             saveBaseAnchor(player.level().getServer(), pos);
             McAgent.LOGGER.info("[Agent] Base established at {} {} {}",
                     pos.getX(), pos.getY(), pos.getZ());

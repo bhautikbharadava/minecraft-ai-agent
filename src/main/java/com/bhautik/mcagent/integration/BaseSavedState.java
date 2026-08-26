@@ -50,9 +50,15 @@ public final class BaseSavedState extends SavedData {
         this.chestZ = chestZ;
     }
 
-    /** @return the persisted state, creating an empty one on first use. */
+    /** @return the persisted state, creating an empty one when absent. */
     public static BaseSavedState get(net.minecraft.server.MinecraftServer server) {
-        return server.overworld().getDataStorage().get(TYPE);
+        var storage = server.overworld().getDataStorage();
+        var state = storage.get(TYPE);
+        if (state == null) {
+            state = new BaseSavedState();
+            storage.set(TYPE, state);
+        }
+        return state;
     }
 
     public void setAnchor(int x, int y, int z) {

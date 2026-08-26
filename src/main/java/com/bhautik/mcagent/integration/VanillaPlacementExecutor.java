@@ -76,6 +76,12 @@ public final class VanillaPlacementExecutor {
         return itemId -> place(player, itemId);
     }
 
+    /** Position of the nearest matching block, or null. */
+    public static net.minecraft.core.BlockPos findBlockPos(ServerPlayer player,
+            net.minecraft.world.level.block.Block block, int radius) {
+        return findBlockNear(player, block, radius);
+    }
+
     /** Light level where the agent stands (0-15). */
     public static com.bhautik.mcagent.world.LightSensor lightSensor(ServerPlayer player) {
         return () -> player.level().getMaxLocalRawBrightness(player.blockPosition());
