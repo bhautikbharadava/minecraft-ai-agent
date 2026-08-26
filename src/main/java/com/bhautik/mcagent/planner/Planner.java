@@ -59,6 +59,14 @@ public final class Planner {
     public static final String TORCH_ITEM = "minecraft:torch";
     /** Storage block of the home base. */
     public static final String BASE_CHEST_ITEM = "minecraft:chest";
+    /** Gatherable foods used for automatic meal prep before long goals. */
+    public static final List<String> FORAGE_FOODS = List.of(
+            "minecraft:sweet_berries", "minecraft:brown_mushroom",
+            "minecraft:red_mushroom");
+    /** Mining plans top food up to this many items first. */
+    public static final int MIN_FOOD_ITEMS = 6;
+    /** How many food items one upkeep top-up gathers. */
+    public static final int FOOD_UPKEEP_AMOUNT = 12;
     /** Mining plans trigger a torch top-up when stock drops below this. */
     public static final int MIN_TORCHES = 16;
     /** Top-ups fill a full stack so long digs never run dark. */
@@ -88,7 +96,8 @@ public final class Planner {
                               TunnelLighter tunnelLighter,
                               BiomeSensor biomeSensor,
                               PositionAnchor anchor,
-                              Equipper equipper) {
+                              Equipper equipper,
+                              java.util.function.IntSupplier carriedEdibles) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -153,6 +162,27 @@ public final class Planner {
                         "[Planner] Torch upkeep prepended (plan now {} steps)", plan.size());
             } catch (PlanningException unresolvableTorches) {
                 // No torch route: mine anyway; survival handles the rest.
+            }
+        }
+        // Food upkeep (prevention over reaction): long digs burn hunger,
+        // and starving mid-goal triggers emergency detours later.
+        if (minesSomething
+                && environment.carriedEdibles().getAsInt() < MIN_FOOD_ITEMS) {
+            Expansion foodRun = new Expansion(resolver, plannedCounts, ownedItemIds,
+                    liveCounts, environment);
+            for (String food : FORAGE_FOODS) {
+                try {
+                    foodRun.expand(food, FOOD_UPKEEP_AMOUNT);
+                    if (!foodRun.plan.isEmpty()) {
+                        plan.addAll(0, foodRun.plan);
+                        com.bhautik.mcagent.McAgent.LOGGER.info(
+                                "[Planner] Food upkeep prepended ({} x{})",
+                                food.replaceFirst("^minecraft:", ""), FOOD_UPKEEP_AMOUNT);
+                        break;
+                    }
+                } catch (PlanningException unresolvableFood) {
+                    // try the next gatherable food
+                }
             }
         }
         // A table or furnace this plan placed is picked back up once

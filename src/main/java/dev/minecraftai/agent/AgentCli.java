@@ -651,6 +651,34 @@ public final class AgentCli {
         assertEquals(localCactusPlan.get(0).getClass(), MineAction.class,
                 "already-in-biome digs immediately");
 
+        // Food upkeep: low carried meals prepend a forage chain (berries
+        // are taiga-gated, so exploration chains first) before digging.
+        var hungryEnv = new com.bhautik.mcagent.planner.Planner.Environment(
+                crafter, okSmelter(), placer,
+                itemId -> com.bhautik.mcagent.action.BreakBlockAction.Breaker.Result.ok(),
+                resolver, output -> Optional.empty(),
+                com.bhautik.mcagent.world.BlockLocator.NONE,
+                com.bhautik.mcagent.world.BlockLocator.NONE,
+                (x, y, z) -> 100.0, () -> false,
+                () -> "minecraft:plains",
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    @Override public int x() { return 5; }
+                    @Override public int z() { return 7; }
+                },
+                itemId -> true,
+                () -> 2);
+        List<AgentAction> hungryPlan = planner.planAcquisition(
+                resolver, torchStocked(), Set.of("minecraft:wooden_pickaxe"),
+                id -> 0, hungryEnv, "minecraft:cobblestone", 3);
+        assertContains(hungryPlan.get(0).title(), "taiga");
+        assertContains(hungryPlan.get(1).title(), "sweet_berry");
+        boolean minesStone = hungryPlan.stream().anyMatch(
+                step -> step instanceof MineAction && step.title().contains("stone"));
+        if (!minesStone) {
+            throw new IllegalStateException("forage must not replace the goal itself");
+        }
+        // Well-fed agents skip meal prep entirely (legacy plans above).
+
         // Traveling counts as mining progress: a long search must not
         // restart Baritone every 30s (that resets the break in progress).
         com.bhautik.mcagent.world.PositionAnchor wanderAnchor =
@@ -733,7 +761,8 @@ public final class AgentCli {
                     @Override public int x() { return anchorX; }
                     @Override public int z() { return anchorZ; }
                 },
-                itemId -> true);
+                itemId -> true,
+                () -> 99);
     }
 
     /** A smelter that always reports success. */

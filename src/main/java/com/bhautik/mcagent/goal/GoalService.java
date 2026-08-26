@@ -489,6 +489,12 @@ public final class GoalService {
                 abandonRun("player left the server");
                 return;
             }
+            if (player.isDeadOrDying()) {
+                var at = player.blockPosition();
+                abandonRun("agent died at " + at.getX() + " " + at.getY()
+                        + " " + at.getZ() + " - loot dropped on the ground");
+                return;
+            }
 
             run.tickCount++;
             if (run.tickCount % SURVIVAL_CHECK_INTERVAL_TICKS == 0) {
@@ -950,7 +956,8 @@ public final class GoalService {
                     @Override public int x() { return player.blockPosition().getX(); }
                     @Override public int z() { return player.blockPosition().getZ(); }
                 },
-                com.bhautik.mcagent.integration.VanillaEquipment.equipper(player));
+                com.bhautik.mcagent.integration.VanillaEquipment.equipper(player),
+                com.bhautik.mcagent.integration.VanillaSurvivalMonitor.carriedEdibles(player));
     }
 
     /**
