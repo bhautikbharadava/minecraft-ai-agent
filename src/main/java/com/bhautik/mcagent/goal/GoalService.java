@@ -345,7 +345,7 @@ public final class GoalService {
             saveBaseAnchor(player.level().getServer(), pos);
             McAgent.LOGGER.info("[Agent] Base established at {} {} {}",
                     pos.getX(), pos.getY(), pos.getZ());
-            return report.toString();
+            return report.toString().replace("\n", " | ");
         }
     }
 
