@@ -44,13 +44,9 @@ public final class AgentCommand {
                                         goalService,
                                         StringArgumentType.getString(context, "biome")))))
                 .then(Commands.literal("base")
-                        .executes(context -> {
-                            ServerPlayer player = context.getSource().getPlayerOrException();
-                            String report = goalService.base(player);
-                            context.getSource().sendSuccess(
-                                    () -> Component.literal(report), false);
-                            return 1;
-                        }))
+                        .executes(context -> runBase(context.getSource(), goalService))
+                        .then(Commands.literal("here")
+                                .executes(context -> runBase(context.getSource(), goalService))))
                 .then(Commands.literal("stash")
                         .then(Commands.argument("item", StringArgumentType.word())
                                 .executes(context -> stash(context.getSource(), goalService,
@@ -112,6 +108,14 @@ public final class AgentCommand {
         }
         ServerPlayer player = source.getPlayerOrException();
         String report = goalService.getItem(player, itemName, count);
+        source.sendSuccess(() -> Component.literal(report), false);
+        return 1;
+    }
+
+    private static int runBase(CommandSourceStack source, GoalService goalService)
+            throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        String report = goalService.base(player);
         source.sendSuccess(() -> Component.literal(report), false);
         return 1;
     }
