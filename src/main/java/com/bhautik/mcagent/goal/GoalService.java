@@ -745,7 +745,8 @@ public final class GoalService {
             return List.of();
         }
         if (activeRun.kitItems != null) {
-            var countsNow = InventoryState.collect(player).itemCounts();
+            var collectedCounts = InventoryState.collect(player).itemCounts();
+            var countsNow = new java.util.HashMap<>(collectedCounts);
             var baseSupplies = baseSuppliesFor(player);
             for (var entry : baseSupplies.entrySet()) {
                 countsNow.merge(entry.getKey(), entry.getValue(), Integer::sum);
@@ -837,7 +838,8 @@ public final class GoalService {
         int current = activeRun.snapshot.count(activeRun.item);
         activeRun.snapshot.setCount(activeRun.item, current);
         try {
-            var countsNow = InventoryState.collect(player).itemCounts();
+            var collectedCounts = InventoryState.collect(player).itemCounts();
+            var countsNow = new java.util.HashMap<>(collectedCounts);
             var baseSupplies = baseSuppliesFor(player);
             // Items sitting in the base chest / furnace output count as
             // owned: the plan mines only what storage cannot cover.
