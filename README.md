@@ -21,7 +21,9 @@ Summary of what works today:
 - **Exploration**: biome travel, structure discovery (village, mineshaft,
   stronghold, ...), biome-gated resources auto-chain exploration
 - **Base camp**: anchor + chest + table; stash commands and an automatic
-  junk-detour when the bag is nearly full
+  junk-detour when the bag is nearly full. Goals started at base credit
+  chest contents and finished furnace smelts as owned supplies - the
+  plan withdraws them instead of re-mining
 
 Not yet: combat, enchanting, nether/smithing, cave targeting, farms
 (M10/M11), natural language (M12). See PROGRESS.md for the full backlog.
