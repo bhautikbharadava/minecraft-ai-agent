@@ -909,7 +909,7 @@ public final class GoalService {
             // Everything credited was junk (e.g. cobblestone goals):
             // nothing worth withdrawing; planning credit stands as-is.
             return new com.bhautik.mcagent.action.DepositAction(
-                    "No supplies to collect", List.of(), ids -> 0);
+                    "No supplies to collect", List.of(), (ids, maxStacks) -> 0);
         }
         Map<String, Integer> capped = new java.util.HashMap<>();
         withdrawable.forEach(id -> capped.put(id, supplies.get(id)));
