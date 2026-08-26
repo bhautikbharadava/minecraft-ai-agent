@@ -106,10 +106,17 @@ public final class AgentCommand {
                     + " (kits: " + com.bhautik.mcagent.item.Kits.names() + ")"));
             return 0;
         }
-        ServerPlayer player = source.getPlayerOrException();
-        String report = goalService.getItem(player, itemName, count);
-        source.sendSuccess(() -> Component.literal(report), false);
-        return 1;
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            String report = goalService.getItem(player, itemName, count);
+            source.sendSuccess(() -> Component.literal(report), false);
+            return 1;
+        } catch (Exception failure) {
+            com.bhautik.mcagent.McAgent.LOGGER.error("[Agent] /agent get failed",
+                    failure);
+            source.sendFailure(Component.literal("Get failed: " + failure));
+            return 0;
+        }
     }
 
     private static int runBase(CommandSourceStack source, GoalService goalService)
