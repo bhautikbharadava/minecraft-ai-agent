@@ -203,6 +203,20 @@ public final class VanillaStorage {
         };
     }
 
+    /** Position of the nearest storage container (any chest/barrel kind). */
+    public static BlockPos findStoragePos(ServerPlayer player, int radius) {
+        BlockPos origin = player.blockPosition();
+        for (BlockPos pos : BlockPos.betweenClosed(
+                origin.offset(-radius, -radius, -radius),
+                origin.offset(radius, radius, radius))) {
+            var be = player.level().getBlockEntity(pos);
+            if (be instanceof RandomizableContainerBlockEntity) {
+                return pos.immutable();
+            }
+        }
+        return null;
+    }
+
     private static Container findChest(ServerPlayer player, int radius) {
         BlockPos origin = player.blockPosition();
         for (BlockPos pos : BlockPos.betweenClosed(
