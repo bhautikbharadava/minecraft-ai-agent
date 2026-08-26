@@ -326,21 +326,34 @@ public final class GoalService {
             var placer = com.bhautik.mcagent.integration.VanillaPlacementExecutor
                     .placer(player);
             var existingChest = baseChestPos(player.level().getServer());
-            if (existingChest == null) {
-                var chestResult = placer.place(
-                        com.bhautik.mcagent.planner.Planner.BASE_CHEST_ITEM);
-                if (chestResult.success()) {
-                    saveBaseChest(player.level().getServer(), player.blockPosition());
-                    report.append("\nPlaced base chest");
-                } else {
-                    report.append("\nNo chest placed: ").append(chestResult.failureReason())
-                            .append(" (craft one with /agent get chest 1)");
-                }
-            } else {
+            if (existingChest != null) {
                 saveBaseChest(player.level().getServer(), existingChest);
                 report.append("\nBase chest already at ").append(existingChest.getX())
                         .append(" ").append(existingChest.getY()).append(" ")
                         .append(existingChest.getZ());
+            } else {
+                var adopted = com.bhautik.mcagent.integration.VanillaStorage
+                        .findStoragePos(player, 32);
+                McAgent.LOGGER.info("[Agent] Storage scan within 32 blocks: {}",
+                        adopted == null ? "none found" : adopted.toShortString());
+                if (adopted != null) {
+                    saveBaseChest(player.level().getServer(), adopted);
+                    report.append("\nAdopted nearby storage at ").append(adopted.getX())
+                            .append(" ").append(adopted.getY()).append(" ")
+                            .append(adopted.getZ());
+                } else {
+                    var chestResult = placer.place(
+                            com.bhautik.mcagent.planner.Planner.BASE_CHEST_ITEM);
+                    if (chestResult.success()) {
+                        saveBaseChest(player.level().getServer(), player.blockPosition());
+                        report.append("\nPlaced base chest");
+                    } else {
+                        report.append("\nNo chest placed: ")
+                                .append(chestResult.failureReason())
+                                .append(" - stand next to your chest and retry,")
+                                .append(" or craft one with /agent get chest 1");
+                    }
+                }
             }
             saveBaseAnchor(player.level().getServer(), pos);
             McAgent.LOGGER.info("[Agent] Base established at {} {} {}",
