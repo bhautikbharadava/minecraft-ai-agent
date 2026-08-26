@@ -899,12 +899,26 @@ public final class GoalService {
 
     private AgentAction supplyWithdrawStep(ServerPlayer player,
             Map<String, Integer> supplies) {
+        // Never pull tunnel junk back out of the chest: withdrawing the
+        // credited cobblestone/granite refills the bag and defeats the
+        // point of stashing. Only goal-relevant materials come out.
+        List<String> withdrawable = supplies.keySet().stream()
+                .filter(id -> !JUNK_ITEMS.contains(id))
+                .toList();
+        if (withdrawable.isEmpty()) {
+            // Everything credited was junk (e.g. cobblestone goals):
+            // nothing worth withdrawing; planning credit stands as-is.
+            return new com.bhautik.mcagent.action.DepositAction(
+                    "No supplies to collect", List.of(), ids -> 0);
+        }
+        Map<String, Integer> capped = new java.util.HashMap<>();
+        withdrawable.forEach(id -> capped.put(id, supplies.get(id)));
         return new com.bhautik.mcagent.action.WithdrawAction(
                 "Collect from base storage",
-                List.copyOf(supplies.keySet()),
+                List.copyOf(capped.keySet()),
                 com.bhautik.mcagent.integration.VanillaStorage.supplyWithdrawer(
                         player, com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS,
-                        supplies));
+                        capped));
     }
 
     /** Builds the full execution seam bundle against live world state. */
