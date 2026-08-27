@@ -43,6 +43,7 @@ public final class GoalService {
     private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
     /** Hostiles within this distance get engaged in melee (combat v0). */
     private static final double COMBAT_RANGE = 4.0;
+    private static final int LIGHT_CHECK_INTERVAL_TICKS = 20;
     /** Free hotbag slots below which the agent pauses to stash junk. */
     private static final int FREE_SLOT_THRESHOLD = 3;
     /** Items auto-stashed when dumping junk at the base chest. */
@@ -557,6 +558,9 @@ public final class GoalService {
                     }
                 }
             }
+            if (run != null && run.tickCount % LIGHT_CHECK_INTERVAL_TICKS == 0) {
+                handleLighting(run, player);
+            }
             if (run == null) {
                 return;
             }
@@ -567,6 +571,38 @@ public final class GoalService {
             }
 
             executor.pollFinished().ifPresent(finished -> handleFinishedAction(player, finished));
+        }
+    }
+
+    /**
+     * Drops a torch whenever the agent stands in the dark during any
+     * active goal - not just while mining. Best-effort, no queue.
+     */
+    private void handleLighting(ActiveRun run, ServerPlayer player) {
+        if (player.level().getMaxLocalRawBrightness(player.blockPosition())
+                >= com.bhautik.mcagent.action.TunnelLighter.MIN_LIGHT) {
+            return;
+        }
+        var inv = player.getInventory();
+        boolean hasTorch = false;
+        for (int slot = 0; slot < inv.getContainerSize(); slot++) {
+            var stack = inv.getItem(slot);
+            if (!stack.isEmpty()
+                    && net.minecraft.core.registries.BuiltInRegistries.ITEM
+                            .getKey(stack.getItem()).toString()
+                            .equals(com.bhautik.mcagent.planner.Planner.TORCH_ITEM)) {
+                hasTorch = true;
+                break;
+            }
+        }
+        if (!hasTorch) {
+            return;
+        }
+        boolean placed = com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                .placer(player).place(com.bhautik.mcagent.planner.Planner.TORCH_ITEM)
+                .success();
+        if (placed) {
+            McAgent.LOGGER.info("[Action] Placed torch (light {})", player.blockPosition().toShortString());
         }
     }
 
@@ -988,8 +1024,6 @@ public final class GoalService {
                         com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
                         com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                 (x, y, z) -> player.distanceToSqr(x, y, z),
-                com.bhautik.mcagent.integration.VanillaPlacementExecutor.tunnelLighter(player,
-                        com.bhautik.mcagent.planner.Planner.TORCH_ITEM),
                 () -> player.level().getBiome(player.blockPosition()).unwrapKey()
                         .map(key -> key.identifier().toString()).orElse(""),
                 new com.bhautik.mcagent.world.PositionAnchor() {

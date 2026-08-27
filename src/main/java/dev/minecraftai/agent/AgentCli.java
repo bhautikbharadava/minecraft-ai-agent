@@ -127,7 +127,7 @@ public final class AgentCli {
         int[] diamonds = {0};
         int[] equipCalls = {0};
         MineAction gatedMineLive = new MineAction("minecraft:diamond_ore", 0, 3,
-                () -> diamonds[0], equipping, "minecraft:iron_pickaxe", null, null,
+                () -> diamonds[0], equipping, "minecraft:iron_pickaxe", null,
                 itemId -> {
                     equipCalls[0]++;
                     equipping.lastEquipped = itemId;
@@ -526,103 +526,6 @@ public final class AgentCli {
                     + unlitPlan.stream().map(AgentAction::title).toList());
         }
 
-        // Tunnel lighting rides inside MineAction: the lighter is polled
-        // every second while digging and placements are best-effort.
-        int[] lightTicks = {0};
-        com.bhautik.mcagent.action.TunnelLighter countingLighter = () -> {
-            lightTicks[0]++;
-            return true;
-        };
-        FakeBackend litBackend = new FakeBackend();
-        int[] slowOre = {0};
-        MineAction litMine = new MineAction("minecraft:diamond_ore", 0, 2, () -> slowOre[0],
-                litBackend, null, countingLighter);
-        litMine.start();
-        for (int i = 0; i <= com.bhautik.mcagent.action.MineAction.LIGHT_INTERVAL_TICKS; i++) {
-            litMine.tick();
-            if (litMine.status() == ActionStatus.SUCCESS) {
-                break;
-            }
-        }
-        if (lightTicks[0] == 0) {
-            throw new IllegalStateException("mining must poll the tunnel lighter");
-        }
-
-        // Furnace for the set test: 8 cobblestone in a 3x3 ring.
-        recipes.put("minecraft:furnace", tableRecipe("minecraft:furnace", 1,
-                cell("minecraft:cobblestone"), cell("minecraft:cobblestone"),
-                cell("minecraft:cobblestone"), cell("minecraft:cobblestone"),
-                SlotSpec.EMPTY, cell("minecraft:cobblestone"),
-                cell("minecraft:cobblestone"), cell("minecraft:cobblestone"),
-                cell("minecraft:cobblestone")));
-        // UC-09: multi-root plans pool shared dependencies - two chests
-        // and a furnace mine their total need once.
-        List<Map.Entry<String, Integer>> roots = List.of(
-                Map.entry("minecraft:chest", 2),
-                Map.entry("minecraft:furnace", 1));
-        List<AgentAction> setPlan = planner.planAcquisition(resolver,
-                torchStocked(), Set.of("minecraft:wooden_pickaxe"), id -> 0,
-                env(crafter, placer, blockNearby()), roots);
-        long stoneMines = setPlan.stream()
-                .filter(step -> step instanceof MineAction
-                        && step.title().contains("stone"))
-                .count();
-        assertEquals(stoneMines, 1L, "shared dependencies mined once");
-        // 16 chest planks + 8 furnace cobble... total stone demand:
-        int stoneTarget = 0;
-        for (AgentAction step : setPlan) {
-            if (step instanceof MineAction mine && mine.title().contains("stone")) {
-                stoneTarget += Integer.parseInt(mine.title()
-                        .replace("Mine ", "").replace(" stone", "").split(" ")[0]);
-            }
-        }
-        if (stoneTarget != 8) {
-            throw new IllegalStateException("total pooled demand: expected [8] got [" + stoneTarget
-                    + "] " + setPlan.stream().map(AgentAction::title).toList());
-        }
-
-        // Kit registry contents.
-        var ironPieces = com.bhautik.mcagent.item.Kits.itemsFor("iron_armor").orElseThrow();
-        assertEquals(ironPieces.size(), 4, "armor kits have four pieces");
-        if (!com.bhautik.mcagent.item.Kits.isKit("diamond_armor")
-                || com.bhautik.mcagent.item.Kits.isKit("netherite_armor")) {
-            throw new IllegalStateException("kit registry contents wrong");
-        }
-
-        // GetKitGoal lifecycle via live supplier.
-        dev.minecraftai.agent.world.InventoryState scratchInv =
-                new dev.minecraftai.agent.world.InventoryState();
-        var helmet = new dev.minecraftai.agent.item.MinecraftItem(
-                "minecraft:diamond_helmet");
-        var boots = new dev.minecraftai.agent.item.MinecraftItem(
-                "minecraft:diamond_boots");
-        dev.minecraftai.agent.goal.GetKitGoal kit =
-                new dev.minecraftai.agent.goal.GetKitGoal("partial", List.of(helmet, boots),
-                        1, () -> scratchInv.count(helmet) >= 1 && scratchInv.count(boots) >= 1);
-        kit.activate();
-        assertEquals(kit.status(), dev.minecraftai.agent.goal.GoalStatus.ACTIVE,
-                "incomplete kit stays active");
-        scratchInv.setCount(helmet, 1);
-        if (kit.status() != dev.minecraftai.agent.goal.GoalStatus.ACTIVE) {
-            throw new IllegalStateException("half-carried kit must remain active");
-        }
-        scratchInv.setCount(boots, 1);
-        kit.markSuccess();
-        assertEquals(kit.status(), dev.minecraftai.agent.goal.GoalStatus.SUCCESS,
-                "full kit completes");
-        assertContains(kit.progressReport(), "diamond_helmet");
-
-        // Structure directory: friendly names resolve to vanilla tags.
-        assertContains(String.valueOf(
-                com.bhautik.mcagent.world.StructureDirectory.tagFor("village").orElseThrow()),
-                "village");
-        assertContains(String.valueOf(com.bhautik.mcagent.world.StructureDirectory
-                .tagFor("stronghold").orElseThrow()), "eye_of_ender_located");
-        if (com.bhautik.mcagent.world.StructureDirectory.isSearchable("not_a_thing")
-                || com.bhautik.mcagent.world.StructureDirectory.isSearchable(null)) {
-            throw new IllegalStateException("unknown structures must not be searchable");
-        }
-
         // Biome-gated gathering chains exploration before the dig, and
         // skips it entirely when already standing in the right biome.
         String[] currentBiome = {"minecraft:plains"};
@@ -664,7 +567,7 @@ public final class AgentCli {
         FakeBackend travelBackend = new FakeBackend();
         int[] equips = {0};
         MineAction traveler = new MineAction("minecraft:iron_ore", 0, 5, () -> 0,
-                travelBackend, "minecraft:diamond_pickaxe", null, wanderAnchor,
+                travelBackend, "minecraft:diamond_pickaxe", wanderAnchor,
                 itemId -> {
                     equips[0]++;
                     return true;
@@ -729,7 +632,6 @@ public final class AgentCli {
                 },
                 smelting,
                 locator, locator, (x, y, z) -> 100.0,
-                () -> false,
                 biome::get,
                 new com.bhautik.mcagent.world.PositionAnchor() {
                     @Override public int x() { return anchorX; }

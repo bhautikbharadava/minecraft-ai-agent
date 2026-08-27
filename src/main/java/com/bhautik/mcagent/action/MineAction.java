@@ -14,16 +14,12 @@ public final class MineAction implements AgentAction {
     /** Ticks without inventory progress before the backend is re-issued or the action fails. */
     public static final int IDLE_TIMEOUT_TICKS = 600;
     public static final int MAX_ISSUE_ATTEMPTS = 2;
-    /** Place (or refresh) tunnel lighting once per second while digging. */
-    public static final int LIGHT_INTERVAL_TICKS = 20;
-
     private final String title;
     private final String sourceBlockName;
     private final int targetTotal;
     private final IntSupplier liveCount;
     private final BaritoneIntegration backend;
     private final String preferredToolItemId;
-    private final TunnelLighter lighter;
     private final Equipper equipper;
     private final com.bhautik.mcagent.world.PositionAnchor anchor;
 
@@ -41,26 +37,19 @@ public final class MineAction implements AgentAction {
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend) {
         this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
-                null, null, null, null);
-    }
-
-    public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
-                      IntSupplier liveCount, BaritoneIntegration backend,
-                      String preferredToolItemId, TunnelLighter lighter) {
-        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
-                preferredToolItemId, lighter, null, null);
+                null, null, null);
     }
 
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend,
                       String preferredToolItemId) {
         this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
-                preferredToolItemId, null, null, null);
+                preferredToolItemId, null, null);
     }
 
     public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
                       IntSupplier liveCount, BaritoneIntegration backend,
-                      String preferredToolItemId, TunnelLighter lighter,
+                      String preferredToolItemId,
                       com.bhautik.mcagent.world.PositionAnchor anchor,
                       Equipper equipper) {
         this.sourceBlockName = sourceBlockName;
@@ -68,7 +57,6 @@ public final class MineAction implements AgentAction {
         this.liveCount = liveCount;
         this.backend = backend;
         this.preferredToolItemId = preferredToolItemId;
-        this.lighter = lighter;
         this.equipper = equipper;
         this.anchor = anchor;
         this.title = "Mine " + (targetTotal - baselineCount) + " "
@@ -106,11 +94,6 @@ public final class MineAction implements AgentAction {
             return;
         }
         ticksSinceStart++;
-        // Continuous tunnel lighting while digging (best-effort).
-        if (lighter != null && ticksSinceStart % LIGHT_INTERVAL_TICKS == 0
-                && lighter.tryPlace()) {
-            McAgent.LOGGER.info("[Action] Placed tunnel torch for {}", title);
-        }
         int count = Math.max(liveCount.getAsInt(), 0);
         if (count >= targetTotal) {
             backend.stop();

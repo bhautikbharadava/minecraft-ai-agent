@@ -16,7 +16,6 @@ import com.bhautik.mcagent.world.BiomeSensor;
 import com.bhautik.mcagent.world.BlockLocator;
 import com.bhautik.mcagent.world.DistanceSensor;
 import com.bhautik.mcagent.world.PositionAnchor;
-import com.bhautik.mcagent.action.TunnelLighter;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -91,7 +90,6 @@ public final class Planner {
                               BlockLocator tableLocator,
                               BlockLocator furnaceLocator,
                               DistanceSensor distanceSensor,
-                              TunnelLighter tunnelLighter,
                               BiomeSensor biomeSensor,
                               PositionAnchor anchor,
                               Equipper equipper) {
@@ -248,7 +246,6 @@ public final class Planner {
                 plan.add(new MineAction(sourceBlock, have, have + missing,
                         () -> liveCounts.applyAsInt(itemId), baritoneIntegration,
                         toolToHold,
-                        environment.tunnelLighter(),
                         environment.anchor(),
                         environment.equipper()));
                 produced.merge(itemId, missing, Integer::sum);
