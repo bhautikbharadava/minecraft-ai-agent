@@ -227,7 +227,7 @@ public final class VanillaPlacementExecutor {
      * Nearest standable air position adjacent to the target block, so
      * navigation stops beside it instead of mining through it.
      */
-    private static BlockPos findApproachSpot(ServerPlayer player, BlockPos blockPos) {
+    public static BlockPos findApproachSpot(ServerPlayer player, BlockPos blockPos) {
         Level level = player.level();
         List<BlockPos> candidates = new ArrayList<>();
         for (int dx = -1; dx <= 1; dx++) {

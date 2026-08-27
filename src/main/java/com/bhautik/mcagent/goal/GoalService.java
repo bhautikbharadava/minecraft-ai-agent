@@ -649,9 +649,12 @@ public final class GoalService {
                                                         ServerPlayer player) {
         var chest = baseChestPos(player.level().getServer());
         java.util.List<AgentAction> detour = new ArrayList<>();
+        var approach2 = com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                .findApproachSpot(player, chest);
+        var target2 = approach2 != null ? approach2 : chest;
         java.util.function.DoubleSupplier distance = () ->
-                player.distanceToSqr(chest.getX(), chest.getY(), chest.getZ());
-        if (player.blockPosition().distSqr(chest) > 16.0) {
+                player.distanceToSqr(target2.getX(), target2.getY(), target2.getZ());
+        if (player.blockPosition().distSqr(target2) > 16.0) {
             detour.add(new com.bhautik.mcagent.action.MoveAction("base chest",
                     chest.getX(), chest.getY(), chest.getZ(),
                     4.0 * 4.0, distance::getAsDouble,
@@ -857,10 +860,13 @@ public final class GoalService {
                 activeRun.goal.markFailed("no base chest");
                 return List.of();
             }
+            var approach = com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                    .findApproachSpot(player, chest);
+            var target = approach != null ? approach : chest;
             java.util.function.DoubleSupplier distance = () ->
-                    player.distanceToSqr(chest.getX(), chest.getY(), chest.getZ());
+                    player.distanceToSqr(target.getX(), target.getY(), target.getZ());
             List<AgentAction> actions = new ArrayList<>();
-            if (player.blockPosition().distSqr(chest) > 16.0) {
+            if (player.blockPosition().distSqr(target) > 16.0) {
                 actions.add(new com.bhautik.mcagent.action.MoveAction("base chest",
                         chest.getX(), chest.getY(), chest.getZ(),
                         4.0 * 4.0, distance::getAsDouble,
@@ -879,10 +885,13 @@ public final class GoalService {
                 activeRun.goal.markFailed("no base chest");
                 return List.of();
             }
+            var approach = com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                    .findApproachSpot(player, chest);
+            var target = approach != null ? approach : chest;
             java.util.function.DoubleSupplier distance = () ->
-                    player.distanceToSqr(chest.getX(), chest.getY(), chest.getZ());
+                    player.distanceToSqr(target.getX(), target.getY(), target.getZ());
             List<AgentAction> actions = new ArrayList<>();
-            if (player.blockPosition().distSqr(chest) > 16.0) {
+            if (player.blockPosition().distSqr(target) > 16.0) {
                 actions.add(new com.bhautik.mcagent.action.MoveAction("base chest",
                         chest.getX(), chest.getY(), chest.getZ(),
                         4.0 * 4.0, distance::getAsDouble,
