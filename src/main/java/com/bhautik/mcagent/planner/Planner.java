@@ -59,16 +59,14 @@ public final class Planner {
     public static final String TORCH_ITEM = "minecraft:torch";
     /** Storage block of the home base. */
     public static final String BASE_CHEST_ITEM = "minecraft:chest";
-    /** Gatherable foods used for automatic meal prep before long goals. */
-    public static final List<String> FORAGE_FOODS = List.of(
-            "minecraft:sweet_berries", "minecraft:brown_mushroom",
-            "minecraft:red_mushroom");
-    /** Mining plans top food up to this many items first. */
-    public static final int MIN_FOOD_ITEMS = 6;
-    /** How many food items one upkeep top-up gathers. */
-    public static final int FOOD_UPKEEP_AMOUNT = 12;
     /** Mining plans trigger a torch top-up when stock drops below this. */
     public static final int MIN_TORCHES = 16;
+    /** Food the agent keeps pre-stocked before long goals. */
+    public static final String FOOD_UPKEEP_ITEM = "minecraft:sweet_berries";
+    /** Trigger when fewer than this many edibles are carried. */
+    public static final int MIN_EDIBLES = 6;
+    /** Upkeep crafts/forages this much before the goal. */
+    public static final int FOOD_STACK_TARGET = 12;
     /** Top-ups fill a full stack so long digs never run dark. */
     public static final int TORCH_STACK_TARGET = 64;
 
@@ -96,8 +94,7 @@ public final class Planner {
                               TunnelLighter tunnelLighter,
                               BiomeSensor biomeSensor,
                               PositionAnchor anchor,
-                              Equipper equipper,
-                              java.util.function.IntSupplier carriedEdibles) {
+                              Equipper equipper) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -164,25 +161,20 @@ public final class Planner {
                 // No torch route: mine anyway; survival handles the rest.
             }
         }
-        // Food upkeep (prevention over reaction): long digs burn hunger,
-        // and starving mid-goal triggers emergency detours later.
-        if (minesSomething
-                && environment.carriedEdibles().getAsInt() < MIN_FOOD_ITEMS) {
+        // Food upkeep: keep edibles stocked before mining-heavy goals, so
+        // starvation interrupts stay rare. Mirrors torch upkeep.
+        int carriedEdibles = Math.max(plannedCounts.apply(FOOD_UPKEEP_ITEM), 0);
+        boolean goalIsFood = roots.stream().anyMatch(e -> FOOD_UPKEEP_ITEM.equals(e.getKey()));
+        if (!goalIsFood && minesSomething && carriedEdibles < MIN_EDIBLES) {
             Expansion foodRun = new Expansion(resolver, plannedCounts, ownedItemIds,
                     liveCounts, environment);
-            for (String food : FORAGE_FOODS) {
-                try {
-                    foodRun.expand(food, FOOD_UPKEEP_AMOUNT);
-                    if (!foodRun.plan.isEmpty()) {
-                        plan.addAll(0, foodRun.plan);
-                        com.bhautik.mcagent.McAgent.LOGGER.info(
-                                "[Planner] Food upkeep prepended ({} x{})",
-                                food.replaceFirst("^minecraft:", ""), FOOD_UPKEEP_AMOUNT);
-                        break;
-                    }
-                } catch (PlanningException unresolvableFood) {
-                    // try the next gatherable food
-                }
+            try {
+                foodRun.expand(FOOD_UPKEEP_ITEM, FOOD_STACK_TARGET - carriedEdibles);
+                plan.addAll(0, foodRun.plan);
+                com.bhautik.mcagent.McAgent.LOGGER.info(
+                        "[Planner] Food upkeep prepended (plan now {} steps)", plan.size());
+            } catch (PlanningException unresolvableFood) {
+                // No food route: proceed; survival handles the rest reactively.
             }
         }
         // A table or furnace this plan placed is picked back up once

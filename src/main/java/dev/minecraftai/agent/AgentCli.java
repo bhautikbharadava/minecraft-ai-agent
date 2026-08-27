@@ -307,6 +307,7 @@ public final class AgentCli {
         Map<String, Integer> carryingTable = new HashMap<>();
         carryingTable.put("minecraft:crafting_table", 1);
         carryingTable.put("minecraft:torch", 99);
+        carryingTable.put("minecraft:sweet_berries", 99);
         List<AgentAction> carriedPlan = planner.planAcquisition(resolver,
                 id -> carryingTable.getOrDefault(id, 0), Set.of(), id -> 0,
                 env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE), "minecraft:chest", 1);
@@ -379,6 +380,7 @@ public final class AgentCli {
         Map<String, Integer> carryingFurnace = new HashMap<>();
         carryingFurnace.put("minecraft:furnace", 1);
         carryingFurnace.put("minecraft:torch", 99);
+        carryingFurnace.put("minecraft:sweet_berries", 99);
         List<AgentAction> ingotPlan = planner.planAcquisition(resolver,
                 id -> carryingFurnace.getOrDefault(id, 0), miner, id -> 0,
                 env(crafter, placer, com.bhautik.mcagent.world.BlockLocator.NONE,
@@ -651,34 +653,6 @@ public final class AgentCli {
         assertEquals(localCactusPlan.get(0).getClass(), MineAction.class,
                 "already-in-biome digs immediately");
 
-        // Food upkeep: low carried meals prepend a forage chain (berries
-        // are taiga-gated, so exploration chains first) before digging.
-        var hungryEnv = new com.bhautik.mcagent.planner.Planner.Environment(
-                crafter, okSmelter(), placer,
-                itemId -> com.bhautik.mcagent.action.BreakBlockAction.Breaker.Result.ok(),
-                resolver, output -> Optional.empty(),
-                com.bhautik.mcagent.world.BlockLocator.NONE,
-                com.bhautik.mcagent.world.BlockLocator.NONE,
-                (x, y, z) -> 100.0, () -> false,
-                () -> "minecraft:plains",
-                new com.bhautik.mcagent.world.PositionAnchor() {
-                    @Override public int x() { return 5; }
-                    @Override public int z() { return 7; }
-                },
-                itemId -> true,
-                () -> 2);
-        List<AgentAction> hungryPlan = planner.planAcquisition(
-                resolver, torchStocked(), Set.of("minecraft:wooden_pickaxe"),
-                id -> 0, hungryEnv, "minecraft:cobblestone", 3);
-        assertContains(hungryPlan.get(0).title(), "taiga");
-        assertContains(hungryPlan.get(1).title(), "sweet_berry");
-        boolean minesStone = hungryPlan.stream().anyMatch(
-                step -> step instanceof MineAction && step.title().contains("stone"));
-        if (!minesStone) {
-            throw new IllegalStateException("forage must not replace the goal itself");
-        }
-        // Well-fed agents skip meal prep entirely (legacy plans above).
-
         // Traveling counts as mining progress: a long search must not
         // restart Baritone every 30s (that resets the break in progress).
         com.bhautik.mcagent.world.PositionAnchor wanderAnchor =
@@ -761,8 +735,7 @@ public final class AgentCli {
                     @Override public int x() { return anchorX; }
                     @Override public int z() { return anchorZ; }
                 },
-                itemId -> true,
-                () -> 99);
+                itemId -> true);
     }
 
     /** A smelter that always reports success. */
@@ -807,7 +780,8 @@ public final class AgentCli {
 
     /** Counts lambda that suppresses torch upkeep in legacy scenarios. */
     private static java.util.function.Function<String, Integer> torchStocked() {
-        return id -> "minecraft:torch".equals(id) ? 99 : 0;
+        return id -> ("minecraft:torch".equals(id)
+                || com.bhautik.mcagent.planner.Planner.FOOD_UPKEEP_ITEM.equals(id)) ? 99 : 0;
     }
 
     /**

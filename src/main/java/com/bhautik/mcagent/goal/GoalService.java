@@ -466,6 +466,38 @@ public final class GoalService {
         }
     }
 
+    public String returnToBase(ServerPlayer player) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent cancel first.";
+            }
+            var anchor = baseAnchor(player.level().getServer());
+            if (anchor == null) {
+                return "No base yet. Run /agent base here first.";
+            }
+            ExploreGoal goal = new ExploreGoal("return to base",
+                    () -> player.blockPosition().distSqr(anchor) <= 16.0);
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            goalManager.register(goal);
+            if (goal.status() == GoalStatus.SUCCESS) {
+                return goal.progressReport();
+            }
+            ActiveRun activeRun = new ActiveRun(goal, null, player.getUUID(), 0,
+                    snapshot(player), player.level().getServer(),
+                    com.bhautik.mcagent.integration.VanillaSurvivalMonitor.monitor(player));
+            // Reuse structure distance pathway for generic return
+            activeRun.structureTargetPos = anchor;
+            activeRun.structureDistance = () -> player.distanceToSqr(
+                    anchor.getX(), anchor.getY(), anchor.getZ());
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            return goal.progressReport() + System.lineSeparator()
+                    + "Returning to base at " + anchor.getX() + " " + anchor.getY() + " " + anchor.getZ() + ".";
+        }
+    }
+
     public String cancelActiveGoal() {
         synchronized (monitor) {
             if (run != null) {
@@ -490,9 +522,17 @@ public final class GoalService {
                 return;
             }
             if (player.isDeadOrDying()) {
-                var at = player.blockPosition();
-                abandonRun("agent died at " + at.getX() + " " + at.getY()
-                        + " " + at.getZ() + " - loot dropped on the ground");
+                McAgent.LOGGER.warn("[Agent] Agent died at {} {} {}",
+                        player.blockPosition().getX(), player.blockPosition().getY(),
+                        player.blockPosition().getZ());
+                executor.cancelCurrent("agent died");
+                if (run != null) {
+                    run.goal.markFailed("agent died at "
+                            + player.blockPosition().toShortString() + " - loot dropped");
+                    McAgent.LOGGER.warn("[Agent] Goal failed: {} ({})",
+                            run.goal.title(), run.goal.failureReason());
+                    run = null;
+                }
                 return;
             }
 
@@ -956,8 +996,7 @@ public final class GoalService {
                     @Override public int x() { return player.blockPosition().getX(); }
                     @Override public int z() { return player.blockPosition().getZ(); }
                 },
-                com.bhautik.mcagent.integration.VanillaEquipment.equipper(player),
-                com.bhautik.mcagent.integration.VanillaSurvivalMonitor.carriedEdibles(player));
+                com.bhautik.mcagent.integration.VanillaEquipment.equipper(player));
     }
 
     /**

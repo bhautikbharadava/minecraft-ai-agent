@@ -33,8 +33,6 @@ master.
 | Base camp + storage + auto-stash | (M11 groundwork) | ✅ Done (persisted) | master |
 | Restock from base | `/agent restock torches/food/<item>` | ✅ Done | master |
 | Base-supply crediting in plans | goals started at base use stored items | ✅ Done | master |
-| Food upkeep before long goals | forage when carried meals < 6 | ✅ Done | master |
-| Death handling | fast honest fail with location | ✅ Done | master |
 | M10 Building foundation | §17 M10 | ⬜ Backlog | - |
 | M11 Farm building | §16 UC-11, §17 M11 | ⬜ Backlog | - |
 | M12 Natural language | §18, §17 M12 | ⬜ Backlog | - |

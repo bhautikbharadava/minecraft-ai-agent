@@ -56,23 +56,6 @@ public final class VanillaSurvivalMonitor {
         };
     }
 
-
-    /** Count of edible items currently carried (for meal-prep upkeep). */
-    public static java.util.function.IntSupplier carriedEdibles(ServerPlayer player) {
-        return () -> {
-            int total = 0;
-            var inventory = player.getInventory();
-            for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
-                ItemStack stack = inventory.getItem(slot);
-                if (!stack.isEmpty()
-                        && stack.get(net.minecraft.core.component.DataComponents.FOOD) != null) {
-                    total += stack.getCount();
-                }
-            }
-            return total;
-        };
-    }
-
     /**
      * Eats the single most nutritious food stack in inventory; returns
      * the nutrition applied, or 0 when nothing edible is carried or

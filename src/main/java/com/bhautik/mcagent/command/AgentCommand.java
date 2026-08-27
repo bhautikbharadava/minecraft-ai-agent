@@ -64,6 +64,10 @@ public final class AgentCommand {
                                         .executes(context -> restock(context.getSource(), goalService,
                                                 StringArgumentType.getString(context, "item"),
                                                 IntegerArgumentType.getInteger(context, "count"))))))
+                .then(Commands.literal("return")
+                        .executes(context -> runReturn(context.getSource(), goalService)))
+                .then(Commands.literal("home")
+                        .executes(context -> runReturn(context.getSource(), goalService)))
                 .then(Commands.literal("goal")
                         .executes(context -> {
                             context.getSource().sendSuccess(() -> Component.literal(goalService.describeActiveGoal()), false);
@@ -77,7 +81,7 @@ public final class AgentCommand {
     }
 
     private static int sendUsage(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item> <count> | /agent explore <biome|structure> | /agent goal | /agent cancel"), false);
+        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item|kit> <count> | /agent explore <biome|structure> | /agent base here | /agent stash <item|junk> [all|count] | /agent restock <torches|food|item> [count] | /agent return | /agent goal | /agent cancel"), false);
         return 1;
     }
 
@@ -153,6 +157,18 @@ public final class AgentCommand {
         String report = goalService.restock(player, name, count);
         if (report.startsWith("Invalid") || report.startsWith("No base")
                 || report.startsWith("No food")) {
+            source.sendFailure(Component.literal(report));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal(report), false);
+        return 1;
+    }
+
+    private static int runReturn(CommandSourceStack source, GoalService goalService)
+            throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        String report = goalService.returnToBase(player);
+        if (report.startsWith("No base")) {
             source.sendFailure(Component.literal(report));
             return 0;
         }
