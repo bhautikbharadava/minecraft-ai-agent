@@ -23,6 +23,18 @@ public record InventoryState(Map<String, Integer> itemCounts) {
                 counts.merge(itemId, stack.getCount(), Integer::sum);
             }
         }
+        for (net.minecraft.world.entity.EquipmentSlot slot : new net.minecraft.world.entity.EquipmentSlot[]{
+                net.minecraft.world.entity.EquipmentSlot.HEAD,
+                net.minecraft.world.entity.EquipmentSlot.CHEST,
+                net.minecraft.world.entity.EquipmentSlot.LEGS,
+                net.minecraft.world.entity.EquipmentSlot.FEET,
+                net.minecraft.world.entity.EquipmentSlot.OFFHAND}) {
+            ItemStack stack = player.getItemBySlot(slot);
+            if (!stack.isEmpty()) {
+                String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+                counts.merge(itemId, stack.getCount(), Integer::sum);
+            }
+        }
         return new InventoryState(counts);
     }
 

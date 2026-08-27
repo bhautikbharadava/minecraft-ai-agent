@@ -43,6 +43,10 @@ public final class CraftAction implements AgentAction {
         this(recipe, craftsNeeded, liveOutputCount, crafter, null);
     }
 
+    public String resultItemId() {
+        return recipe.resultItemId();
+    }
+
     public CraftAction(CraftableRecipe recipe, int craftsNeeded, IntSupplier liveOutputCount,
                        Crafter crafter, BooleanSupplier environmentReady) {
         this.recipe = recipe;

@@ -161,7 +161,9 @@ public final class GoalService {
                         pieces, requestedCount,
                         () -> pieces.stream().allMatch(piece ->
                                 liveCountById(player.level().getServer(), player.getUUID(),
-                                        piece.id()) >= requestedCount));
+                                        piece.id()) >= requestedCount),
+                        piece -> liveCountById(player.level().getServer(), player.getUUID(),
+                                piece.id()));
                 goal = kitGoal;
                 McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
                 goalManager.register(goal);
@@ -711,6 +713,15 @@ public final class GoalService {
             McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
             run = null;
             return;
+        }
+        // Auto-equip crafted armor so worn pieces count immediately.
+        if (finished instanceof com.bhautik.mcagent.action.CraftAction craft
+                && craft.status() == ActionStatus.SUCCESS) {
+            String resultId = craft.resultItemId();
+            if (resultId.endsWith("_helmet") || resultId.endsWith("_chestplate")
+                    || resultId.endsWith("_leggings") || resultId.endsWith("_boots")) {
+                com.bhautik.mcagent.integration.VanillaEquipment.tryEquipArmor(player, resultId);
+            }
         }
         if (finished instanceof RecoverAction
                 || finished instanceof com.bhautik.mcagent.action.DepositAction

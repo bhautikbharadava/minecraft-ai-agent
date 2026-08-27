@@ -14,15 +14,23 @@ public final class GetKitGoal implements AgentGoal {
     private final int requestedEach;
     private final List<MinecraftItem> pieces;
     private final BooleanSupplier allCarried;
+    private final java.util.function.Function<MinecraftItem, Integer> liveCount;
     private GoalStatus status = GoalStatus.IDLE;
     private String failureReason;
 
     public GetKitGoal(String kitName, List<MinecraftItem> pieces, int requestedEach,
                       BooleanSupplier allCarried) {
+        this(kitName, pieces, requestedEach, allCarried, item -> 0);
+    }
+
+    public GetKitGoal(String kitName, List<MinecraftItem> pieces, int requestedEach,
+                      BooleanSupplier allCarried,
+                      java.util.function.Function<MinecraftItem, Integer> liveCount) {
         this.kitName = kitName;
         this.pieces = List.copyOf(pieces);
         this.requestedEach = requestedEach;
         this.allCarried = allCarried;
+        this.liveCount = liveCount;
     }
 
     public String kitName() {
@@ -82,8 +90,11 @@ public final class GetKitGoal implements AgentGoal {
     public String progressReport() {
         StringBuilder report = new StringBuilder("Goal: " + title());
         for (MinecraftItem piece : pieces) {
+            int have = liveCount.apply(piece);
+            String state = have >= requestedEach ? "done (" + have + "/" + requestedEach + ")"
+                    : have + "/" + requestedEach + " pending";
             report.append(System.lineSeparator()).append("  - ")
-                    .append(piece.displayName()).append(": pending");
+                    .append(piece.displayName()).append(": ").append(state);
         }
         report.append(System.lineSeparator()).append("Status: ").append(status);
         if (failureReason != null) {

@@ -75,6 +75,27 @@ public final class VanillaEquipment {
         return null;
     }
 
+    public static void tryEquipArmor(ServerPlayer player, String itemId) {
+        var inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            if (stack.isEmpty() || !idOf(stack).equals(itemId)) {
+                continue;
+            }
+            var equipmentSlot = player.getEquipmentSlotForItem(stack);
+            if (equipmentSlot == null || equipmentSlot.getType() != net.minecraft.world.entity.EquipmentSlot.Type.HUMANOID_ARMOR) {
+                return;
+            }
+            ItemStack equipped = player.getItemBySlot(equipmentSlot);
+            if (!equipped.isEmpty()) {
+                return; // already wearing something, don't replace
+            }
+            player.setItemSlot(equipmentSlot, stack.copy());
+            inventory.removeItem(slot, 1);
+            break;
+        }
+    }
+
     private static String idOf(ItemStack stack) {
         return stack.isEmpty() ? ""
                 : net.minecraft.core.registries.BuiltInRegistries.ITEM

@@ -131,7 +131,7 @@ public final class Planner {
      * a full armor set mines its total diamond need once instead of four
      * independent ladders re-gathering the same intermediates.
      */
-    public List<AgentAction> planAcquisition(RecipeResolver resolver,
+     public List<AgentAction> planAcquisition(RecipeResolver resolver,
                                              Function<String, Integer> plannedCounts,
                                              Set<String> ownedItemIds,
                                              ToIntFunction<String> liveCounts,
@@ -140,7 +140,7 @@ public final class Planner {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
         for (Map.Entry<String, Integer> root : roots) {
-            expansion.expand(root.getKey(), root.getValue());
+            expansion.expand(root.getKey(), root.getValue(), true);
         }
         List<AgentAction> plan = new ArrayList<>(expansion.plan);
         // Torch upkeep (PRD 15 background tier): mining plans top torches
@@ -151,7 +151,7 @@ public final class Planner {
             Expansion torchRun = new Expansion(resolver, plannedCounts, ownedItemIds,
                     liveCounts, environment);
             try {
-                torchRun.expand(TORCH_ITEM, TORCH_STACK_TARGET - carriedTorches);
+                torchRun.expand(TORCH_ITEM, TORCH_STACK_TARGET - carriedTorches, true);
                 plan.addAll(0, torchRun.plan);
                 com.bhautik.mcagent.McAgent.LOGGER.info(
                         "[Planner] Torch upkeep prepended (plan now {} steps)", plan.size());
@@ -167,7 +167,7 @@ public final class Planner {
             Expansion foodRun = new Expansion(resolver, plannedCounts, ownedItemIds,
                     liveCounts, environment);
             try {
-                foodRun.expand(FOOD_UPKEEP_ITEM, FOOD_STACK_TARGET - carriedEdibles);
+                foodRun.expand(FOOD_UPKEEP_ITEM, FOOD_STACK_TARGET - carriedEdibles, true);
                 plan.addAll(0, foodRun.plan);
                 com.bhautik.mcagent.McAgent.LOGGER.info(
                         "[Planner] Food upkeep prepended (plan now {} steps)", plan.size());
@@ -216,8 +216,12 @@ public final class Planner {
         }
 
         private void expand(String itemId, int needed) {
+            expand(itemId, needed, false);
+        }
+
+        private void expand(String itemId, int needed, boolean isTopLevel) {
             int have = Math.max(plannedCounts.apply(itemId), 0)
-                    + produced.getOrDefault(itemId, 0);
+                    + (isTopLevel ? 0 : produced.getOrDefault(itemId, 0));
             int missing = needed - have;
             if (missing <= 0) {
                 return; // already satisfied; PRD: credit existing inventory first
@@ -277,8 +281,8 @@ public final class Planner {
         private void expandSmelting(String itemId, int missing,
                                     SmeltingResolver.SmeltableRecipe smeltable) {
             String input = pickResolvableInput(smeltable);
-            expand(input, missing);
-            expand(FUEL_ITEM, ceilDiv(missing, SmeltAction.ITEMS_PER_FUEL));
+            expand(input, missing, false);
+            expand(FUEL_ITEM, ceilDiv(missing, SmeltAction.ITEMS_PER_FUEL), false);
             planBlockAccess(FURNACE_ITEM, environment.furnaceLocator());
             BooleanSupplier furnaceGate = environment.furnaceLocator()::isNearby;
             plan.add(new SmeltAction(input, FUEL_ITEM, missing,
@@ -312,7 +316,7 @@ public final class Planner {
                 demands.merge(representative, 1, Integer::sum);
             }
             for (Map.Entry<String, Integer> demand : demands.entrySet()) {
-                expand(demand.getKey(), demand.getValue() * crafts);
+                expand(demand.getKey(), demand.getValue() * crafts, false);
             }
             if (recipe.requiresTable()) {
                 planBlockAccess(CRAFTING_TABLE_ITEM, environment.tableLocator());
@@ -349,7 +353,7 @@ public final class Planner {
                                 baritoneIntegration));
                     },
                     () -> {
-                        expand(blockItemId, 1);
+                        expand(blockItemId, 1, false);
                         if (placedBlocks.add(blockItemId)) {
                             plan.add(new PlaceBlockAction(blockItemId,
                                     environment.placer(), locator));
@@ -369,7 +373,7 @@ public final class Planner {
                 throw new PlanningException("circular tool requirement for " + itemId);
             }
             try {
-                expand(tool, 1);
+                expand(tool, 1, false);
             } catch (PlanningException unobtainableTool) {
                 throw new PlanningException(shortName(itemId) + " " + toolReason
                         + "; cannot plan a " + shortName(tool) + ": "
