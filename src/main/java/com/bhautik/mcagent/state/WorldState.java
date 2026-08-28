@@ -7,6 +7,7 @@ public record WorldState(
         double x,
         double y,
         double z,
-        String dimension
+        String dimension,
+        int xpLevel
 ) {
 }

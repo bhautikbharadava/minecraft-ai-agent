@@ -3,7 +3,13 @@ package com.bhautik.mcagent.planner;
 import com.bhautik.mcagent.action.AgentAction;
 import com.bhautik.mcagent.action.BreakBlockAction;
 import com.bhautik.mcagent.action.CraftAction;
+import com.bhautik.mcagent.action.EnchantAction;
 import com.bhautik.mcagent.action.Equipper;
+import com.bhautik.mcagent.action.BreedAction;
+import com.bhautik.mcagent.action.Breeder;
+import com.bhautik.mcagent.action.HuntAction;
+import com.bhautik.mcagent.action.Hunter;
+import com.bhautik.mcagent.action.XpFarmAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.action.MoveAction;
 import com.bhautik.mcagent.action.PlaceBlockAction;
@@ -12,6 +18,7 @@ import com.bhautik.mcagent.crafting.RecipeResolver;
 import com.bhautik.mcagent.crafting.SmeltingResolver;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
+import com.bhautik.mcagent.item.MobDrops;
 import com.bhautik.mcagent.world.BiomeSensor;
 import com.bhautik.mcagent.world.BlockLocator;
 import com.bhautik.mcagent.world.DistanceSensor;
@@ -27,6 +34,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.IntSupplier;
 import java.util.function.ToIntFunction;
 
 /**
@@ -58,6 +66,18 @@ public final class Planner {
     public static final String TORCH_ITEM = "minecraft:torch";
     /** Storage block of the home base. */
     public static final String BASE_CHEST_ITEM = "minecraft:chest";
+    /** The block item the agent uses for enchanting. */
+    public static final String ENCHANTING_TABLE_ITEM = "minecraft:enchanting_table";
+    /** Currency the enchanting table consumes per enchant (vanilla: 1-3). */
+    public static final String LAPIS_ITEM = "minecraft:lapis_lazuli";
+    /** Lapis secured before an enchant so every offer is payable. */
+    public static final int LAPIS_PER_ENCHANT = 3;
+    /**
+     * Ore mined when an enchant needs more XP. Coal is the pick because
+     * it drops XP and needs only a wooden pickaxe, so the farm is never
+     * gated behind a tool the agent lacks.
+     */
+    public static final String XP_FARM_ORE = "minecraft:coal_ore";
     /** Mining plans trigger a torch top-up when stock drops below this. */
     public static final int MIN_TORCHES = 16;
     /** Food the agent keeps pre-stocked before long goals. */
@@ -89,10 +109,14 @@ public final class Planner {
                               SmeltingResolver smeltingResolver,
                               BlockLocator tableLocator,
                               BlockLocator furnaceLocator,
+                              BlockLocator enchantTableLocator,
                               DistanceSensor distanceSensor,
                               BiomeSensor biomeSensor,
                               PositionAnchor anchor,
-                              Equipper equipper) {
+                              Equipper equipper,
+                              Hunter hunter,
+                              com.bhautik.mcagent.world.XpSensor xpSensor,
+                              Breeder breeder) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -137,8 +161,25 @@ public final class Planner {
                                              ToIntFunction<String> liveCounts,
                                              Environment environment,
                                              List<Map.Entry<String, Integer>> roots) {
+        return planAcquisition(resolver, plannedCounts, ownedItemIds, liveCounts,
+                environment, roots, new LinkedHashSet<>());
+    }
+
+    /**
+     * Multi-root planning that also reports every item id the expansion
+     * demanded, so callers can tell which stored supplies the plan
+     * actually relies on instead of hauling a whole chest around.
+     */
+     public List<AgentAction> planAcquisition(RecipeResolver resolver,
+                                             Function<String, Integer> plannedCounts,
+                                             Set<String> ownedItemIds,
+                                             ToIntFunction<String> liveCounts,
+                                             Environment environment,
+                                             List<Map.Entry<String, Integer>> roots,
+                                             Set<String> demandedOut) {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
+        expansion.demanded = demandedOut;
         for (Map.Entry<String, Integer> root : roots) {
             expansion.expand(root.getKey(), root.getValue(), true);
         }
@@ -178,14 +219,74 @@ public final class Planner {
         // A table or furnace this plan placed is picked back up once
         // everything else ran; pre-existing world blocks stay put.
         for (String placed : expansion.placedBlocks) {
-            BlockLocator locator = placed.equals(CRAFTING_TABLE_ITEM)
-                    ? environment.tableLocator() : environment.furnaceLocator();
             plan.add(new BreakBlockAction(placed,
                     environment.breaker(),
                     () -> liveCounts.applyAsInt(placed)));
         }
         return plan;
     }
+
+    /**
+     * Enchanting plan (docs/ENCHANTING.md): secure lapis, reach an
+     * enchanting table — walking to one, or crafting and placing it
+     * through the same machinery that provides crafting tables — then
+     * enchant and pick the table back up.
+     *
+     * <p>The XP levels the table charges are NOT planned here: mining
+     * the dependencies grants XP incidentally, and the enchant step
+     * fails honestly when the level is still short.
+     */
+    public List<AgentAction> planEnchant(RecipeResolver resolver,
+                                         Function<String, Integer> plannedCounts,
+                                         Set<String> ownedItemIds,
+                                         ToIntFunction<String> liveCounts,
+                                         Environment environment,
+                                         EnchantAction.Enchanter enchanter,
+                                         IntSupplier enchantedCount,
+                                         String itemId,
+                                         int minLevel) {
+        Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
+                liveCounts, environment);
+        // The item itself: acquire it when the agent is not carrying one.
+        expansion.expand(itemId, 1, true);
+        int carriedLapis = Math.max(plannedCounts.apply(LAPIS_ITEM), 0);
+        if (carriedLapis < LAPIS_PER_ENCHANT) {
+            expansion.expand(LAPIS_ITEM, LAPIS_PER_ENCHANT - carriedLapis, true);
+        }
+        // Gather-before-place (design decisions log): every mining step is
+        // already queued, so placing the table now cannot be dug through.
+        expansion.planBlockAccess(ENCHANTING_TABLE_ITEM,
+                environment.enchantTableLocator());
+
+        List<AgentAction> plan = new ArrayList<>(expansion.plan);
+        // An explicit level request is a promise to reach it, so farm the
+        // shortfall. Without one the agent spends whatever mining earned.
+        if (minLevel > 1 && environment.xpSensor().level() < minLevel) {
+            plan.add(new XpFarmAction(XP_FARM_ORE, minLevel,
+                    environment.xpSensor(), baritoneIntegration,
+                    environment.anchor()));
+        }
+        plan.add(new EnchantAction(itemId, minLevel, enchanter,
+                environment.enchantTableLocator()::isNearby, enchantedCount));
+        for (String placed : expansion.placedBlocks) {
+            plan.add(new BreakBlockAction(placed,
+                    environment.breaker(),
+                    () -> liveCounts.applyAsInt(placed)));
+        }
+        return plan;
+    }
+
+    /**
+     * Calves worth breeding for a hunt of this size: enough to replace
+     * what will be killed beyond the breeding pair left standing, capped
+     * so a huge order does not turn into an endless ranching session.
+     */
+    private static int calvesFor(int kills) {
+        return Math.min(Math.max(kills, 1), MAX_CALVES_PER_PLAN);
+    }
+
+    /** Ceiling on breeding per plan; beyond this, hunt further afield. */
+    public static final int MAX_CALVES_PER_PLAN = 4;
 
     /** Per-plan state: output list, cycle guard, and block bookkeeping. */
     private final class Expansion {
@@ -204,6 +305,8 @@ public final class Planner {
         private final Set<String> toolChains = new HashSet<>();
         /** Blocks this plan itself placed, in order (dedups placement). */
         private final Set<String> placedBlocks = new LinkedHashSet<>();
+        /** Every item id this expansion asked for, at any depth. */
+        private Set<String> demanded = new LinkedHashSet<>();
 
         private Expansion(RecipeResolver resolver, Function<String, Integer> plannedCounts,
                           Set<String> ownedItemIds, ToIntFunction<String> liveCounts,
@@ -220,6 +323,7 @@ public final class Planner {
         }
 
         private void expand(String itemId, int needed, boolean isTopLevel) {
+            demanded.add(itemId);
             int have = Math.max(plannedCounts.apply(itemId), 0)
                     + (isTopLevel ? 0 : produced.getOrDefault(itemId, 0));
             int missing = needed - have;
@@ -252,6 +356,32 @@ public final class Planner {
                         toolToHold,
                         environment.anchor(),
                         environment.equipper()));
+                produced.merge(itemId, missing, Integer::sum);
+                return;
+            }
+            // Mob drops (leather, raw meat): hunt rather than mine. Tried
+            // before smelting/crafting so raw meat hunts and cooked meat
+            // still resolves through the furnace route above it.
+            var hunt = MobDrops.huntFor(itemId).orElse(null);
+            if (hunt != null) {
+                int kills = ceilDiv(missing, Math.max(hunt.dropsPerKill(), 1));
+                // Grow the herd before harvesting it when the breeding food
+                // is already carried: hunting alone strips the local
+                // population and pushes every later hunt further out.
+                MobDrops.breedingFoodFor(hunt.mobId()).ifPresent(food -> {
+                    if (Math.max(plannedCounts.apply(food), 0) >= BreedAction.PAIR) {
+                        plan.add(new BreedAction(hunt.mobId(), food,
+                                calvesFor(kills), environment.hunter(),
+                                environment.breeder(), baritoneIntegration));
+                    }
+                });
+                plan.add(new HuntAction(hunt.mobId(), itemId, missing,
+                        () -> liveCounts.applyAsInt(itemId),
+                        environment.hunter(), baritoneIntegration,
+                        environment.anchor()));
+                com.bhautik.mcagent.McAgent.LOGGER.info(
+                        "[Planner] Hunt planned: {} x{} (~{} kills)",
+                        itemId, missing, kills);
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }

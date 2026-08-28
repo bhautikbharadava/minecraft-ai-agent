@@ -52,6 +52,11 @@ public final class DirectAcquisitions {
             Map.entry("minecraft:cobbled_deepslate", new Acquisition("minecraft:deepslate", ToolTier.WOOD)),
             Map.entry("minecraft:dirt", new Acquisition("minecraft:dirt", ToolTier.HAND)),
             Map.entry("minecraft:grass_block", new Acquisition("minecraft:grass_block", ToolTier.HAND)),
+            // Breeding food. Wild wheat only grows in village farms, so
+            // this resolves when one is nearby and fails honestly
+            // otherwise; growing our own is the farming milestone.
+            Map.entry("minecraft:wheat", new Acquisition("minecraft:wheat", ToolTier.HAND)),
+            Map.entry("minecraft:wheat_seeds", new Acquisition("minecraft:short_grass", ToolTier.HAND)),
             Map.entry("minecraft:sand", new Acquisition("minecraft:sand", ToolTier.HAND)),
             Map.entry("minecraft:red_sand", new Acquisition("minecraft:red_sand", ToolTier.HAND)),
             Map.entry("minecraft:gravel", new Acquisition("minecraft:gravel", ToolTier.HAND)),

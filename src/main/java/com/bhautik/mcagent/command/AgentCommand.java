@@ -43,6 +43,19 @@ public final class AgentCommand {
                                         context.getSource(),
                                         goalService,
                                         StringArgumentType.getString(context, "biome")))))
+                .then(Commands.literal("enchant")
+                        .then(Commands.argument("item", StringArgumentType.string())
+                                .executes(context -> enchant(
+                                        context.getSource(),
+                                        goalService,
+                                        StringArgumentType.getString(context, "item"),
+                                        null))
+                                .then(Commands.argument("level", IntegerArgumentType.integer(1, 30))
+                                        .executes(context -> enchant(
+                                                context.getSource(),
+                                                goalService,
+                                                StringArgumentType.getString(context, "item"),
+                                                IntegerArgumentType.getInteger(context, "level"))))))
                 .then(Commands.literal("base")
                         .executes(context -> runBase(context.getSource(), goalService))
                         .then(Commands.literal("here")
@@ -81,7 +94,7 @@ public final class AgentCommand {
     }
 
     private static int sendUsage(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item|kit> <count> | /agent explore <biome|structure> | /agent base here | /agent stash <item|junk> [all|count] | /agent restock <torches|food|item> [count] | /agent return | /agent goal | /agent cancel"), false);
+        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item|kit> <count> | /agent explore <biome|structure> | /agent base here | /agent stash <item|junk> [all|count] | /agent restock <torches|food|item> [count] | /agent enchant <item> [level] | /agent return | /agent goal | /agent cancel"), false);
         return 1;
     }
 
@@ -119,6 +132,32 @@ public final class AgentCommand {
             com.bhautik.mcagent.McAgent.LOGGER.error("[Agent] /agent get failed",
                     failure);
             source.sendFailure(Component.literal("Get failed: " + failure));
+            return 0;
+        }
+    }
+
+    /**
+     * Runs a real enchant goal: the agent secures the item, lapis and a
+     * table on its own, then enchants (see docs/ENCHANTING.md).
+     */
+    private static int enchant(CommandSourceStack source, GoalService goalService,
+                               String itemName, Integer level)
+            throws CommandSyntaxException {
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            String report = goalService.enchant(player, itemName, level);
+            if (report.startsWith("Invalid")) {
+                source.sendFailure(Component.literal(report));
+                return 0;
+            }
+            source.sendSuccess(() -> Component.literal(report), false);
+            return 1;
+        } catch (CommandSyntaxException syntax) {
+            throw syntax;
+        } catch (Exception failure) {
+            com.bhautik.mcagent.McAgent.LOGGER.error("[Agent] /agent enchant failed",
+                    failure);
+            source.sendFailure(Component.literal("Enchant check failed: " + failure));
             return 0;
         }
     }
@@ -186,6 +225,7 @@ public final class AgentCommand {
         source.sendSuccess(() -> Component.literal("Hunger: " + worldState.hunger()), false);
         source.sendSuccess(() -> Component.literal(String.format("Position: %.1f %.1f %.1f", worldState.x(), worldState.y(), worldState.z())), false);
         source.sendSuccess(() -> Component.literal("Dimension: " + worldState.dimension()), false);
+        source.sendSuccess(() -> Component.literal("XP level: " + worldState.xpLevel()), false);
         source.sendSuccess(() -> Component.literal("Inventory: " + inventoryState.summary()), false);
         return 1;
     }

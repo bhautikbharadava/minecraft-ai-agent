@@ -12,6 +12,7 @@ import com.bhautik.mcagent.state.InventoryState;
 import com.bhautik.mcagent.survival.Threat;
 import dev.minecraftai.agent.goal.AgentGoal;
 import dev.minecraftai.agent.goal.AgentGoalManager;
+import dev.minecraftai.agent.goal.EnchantGoal;
 import dev.minecraftai.agent.goal.ExploreGoal;
 import dev.minecraftai.agent.goal.GetKitGoal;
 import dev.minecraftai.agent.goal.GetItemGoal;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -111,6 +113,86 @@ public final class GoalService {
 
     public boolean isValidItem(String rawName) {
         return resolve(rawName).isPresent();
+    }
+
+    /**
+     * Enchant goal: the agent self-provisions everything it can — the
+     * item, lapis, and an enchanting table (walked to, or crafted and
+     * placed) — then enchants and picks the table back up.
+     *
+     * <p>XP is the one input that cannot be planned as an item; mining
+     * the dependencies earns it incidentally and the enchant step fails
+     * honestly when the level is still short.
+     */
+    public String enchant(ServerPlayer player, String rawItemName,
+                          Integer requestedLevel) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
+            }
+            Optional<MinecraftItem> itemOpt = resolve(rawItemName);
+            if (itemOpt.isEmpty()) {
+                return "Invalid item name: " + rawItemName;
+            }
+            String itemId = itemOpt.get().id();
+            if (!isEnchantable(itemId)) {
+                return "Invalid item: " + shortName(itemId) + " cannot be enchanted";
+            }
+            int minLevel = requestedLevel == null ? 1 : requestedLevel;
+            MinecraftServer server = player.level().getServer();
+            UUID playerId = player.getUUID();
+
+            EnchantGoal goal = new EnchantGoal(shortName(itemId), minLevel,
+                    () -> enchantedCountById(server, playerId, itemId) > 0,
+                    () -> com.bhautik.mcagent.integration.VanillaXpSensor
+                            .sensor(player).level());
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            goalManager.register(goal);
+            if (goal.status() == GoalStatus.SUCCESS) {
+                McAgent.LOGGER.info("[Agent] Goal completed immediately: {}", goal.title());
+                return goal.progressReport();
+            }
+            ActiveRun activeRun = new ActiveRun(goal, itemOpt.get(), playerId, 1,
+                    snapshot(player), server,
+                    VanillaSurvivalMonitor.monitor(player));
+            activeRun.enchantItemId = itemId;
+            activeRun.enchantMinLevel = minLevel;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            var started = executor.pollFinished();
+            if (started.isPresent()) {
+                ActiveRun failedRun = run;
+                run = null;
+                failedRun.goal.markFailed(started.get().failureReason());
+                McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
+                        failedRun.goal.title(), failedRun.goal.failureReason());
+                return failedRun.goal.progressReport();
+            }
+            return goal.progressReport()
+                    + System.lineSeparator() + "Agent is working. Use /agent goal for progress.";
+        }
+    }
+
+    private static String shortName(String itemId) {
+        return itemId.replaceFirst("^minecraft:", "");
+    }
+
+    /** True when vanilla would accept the item in an enchanting table. */
+    private boolean isEnchantable(String itemId) {
+        var id = Identifier.tryParse(itemId);
+        if (id == null) {
+            return false;
+        }
+        var stack = BuiltInRegistries.ITEM.getOptional(id)
+                .map(net.minecraft.world.item.ItemStack::new)
+                .orElse(null);
+        if (stack == null || stack.isEmpty()) {
+            return false;
+        }
+        // Books are not "enchantable" as tools but are valid table input.
+        return stack.isEnchantable() || itemId.equals("minecraft:book");
     }
 
     /**
@@ -755,6 +837,13 @@ public final class GoalService {
                     McAgent.LOGGER.info("[Recovery] Best-effort step failed; continuing: {}",
                             finished.title());
                     advanceOrFinish(activeRun, current);
+                } else if (!finished.retryable()) {
+                    // Settled fact about the world; a fresh plan would fail
+                    // identically and repeat this step's side effects.
+                    McAgent.LOGGER.info("[Recovery] Not retryable; failing now: {}",
+                            finished.failureReason());
+                    activeRun.goal.markFailed(finished.failureReason());
+                    run = null;
                 } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
                     McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
                 } else {
@@ -850,18 +939,41 @@ public final class GoalService {
             List<Map.Entry<String, Integer>> roots = activeRun.kitItems.stream()
                     .map(piece -> Map.entry(piece.id(), activeRun.requested))
                     .toList();
+            var environment = environmentFor(activeRun, player, countsNow);
+            var demanded = new java.util.LinkedHashSet<String>();
             List<AgentAction> actions = executor.planner().planAcquisition(
-                    environmentFor(activeRun, player, countsNow).resolver(),
+                    environment.resolver(),
                     id -> countsNow.getOrDefault(id, 0),
                     countsNow.keySet(),
                     itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
-                    environmentFor(activeRun, player, countsNow),
-                    roots);
-            if (!baseSupplies.isEmpty()) {
-                actions.addAll(0, java.util.List.of(supplyWithdrawStep(player, baseSupplies)));
-                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", baseSupplies);
+                    environment,
+                    roots,
+                    demanded);
+            var usefulSupplies = relevantSupplies(baseSupplies, demanded);
+            if (!usefulSupplies.isEmpty()) {
+                actions.addAll(0, java.util.List.of(supplyWithdrawStep(player, usefulSupplies)));
+                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
             }
             McAgent.LOGGER.info("[Planner] Kit plan generated: {}",
+                    actions.stream().map(AgentAction::title).toList());
+            return actions;
+        }
+        if (activeRun.enchantItemId != null) {
+            var countsNow = InventoryState.collect(player).itemCounts();
+            var environment = environmentFor(activeRun, player, countsNow);
+            String target = activeRun.enchantItemId;
+            List<AgentAction> actions = executor.planner().planEnchant(
+                    environment.resolver(),
+                    id -> countsNow.getOrDefault(id, 0),
+                    countsNow.keySet(),
+                    itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                    environment,
+                    com.bhautik.mcagent.integration.VanillaEnchanter.enchanter(player,
+                            environment.enchantTableLocator()),
+                    () -> enchantedCountById(activeRun.server, activeRun.playerId, target),
+                    target,
+                    activeRun.enchantMinLevel);
+            McAgent.LOGGER.info("[Planner] Enchant plan generated: {}",
                     actions.stream().map(AgentAction::title).toList());
             return actions;
         }
@@ -949,6 +1061,7 @@ public final class GoalService {
                 countsNow.merge(entry.getKey(), entry.getValue(), Integer::sum);
             }
             var environment = environmentFor(activeRun, player, countsNow);
+            var demanded = new java.util.LinkedHashSet<String>();
             List<AgentAction> actions = executor.planner().planAcquisition(
                     new VanillaRecipeResolver(activeRun.server,
                             com.bhautik.mcagent.crafting.RecipeResolver.Grid.INVENTORY_2X2),
@@ -956,12 +1069,13 @@ public final class GoalService {
                     countsNow.keySet(),
                     itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
                     environment,
-                    activeRun.item.id(),
-                    activeRun.requested);
-            if (!baseSupplies.isEmpty()) {
+                    List.of(Map.entry(activeRun.item.id(), activeRun.requested)),
+                    demanded);
+            var usefulSupplies = relevantSupplies(baseSupplies, demanded);
+            if (!usefulSupplies.isEmpty()) {
                 actions.addAll(0, java.util.List.of(
-                        supplyWithdrawStep(player, baseSupplies)));
-                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", baseSupplies);
+                        supplyWithdrawStep(player, usefulSupplies)));
+                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
             }
             if (activeRun.needsEmergencyFood) {
                 List<AgentAction> forage = forageEmergencyFood(environment);
@@ -994,6 +1108,24 @@ public final class GoalService {
      * finished smelts still inside nearby furnace output slots. Empty
      * when the agent is away from base.
      */
+    /**
+     * Narrows stored supplies to what the plan actually asked for.
+     * Crediting every stored item is right — they count as owned, so the
+     * plan mines less — but WITHDRAWING every stored item is not: a
+     * leather goal was hauling 700 cobblestone out of the base chest,
+     * filling the bag and triggering the auto-stash detour.
+     */
+    private static Map<String, Integer> relevantSupplies(
+            Map<String, Integer> stored, Set<String> demanded) {
+        Map<String, Integer> useful = new java.util.LinkedHashMap<>();
+        for (var entry : stored.entrySet()) {
+            if (demanded.contains(entry.getKey())) {
+                useful.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return useful;
+    }
+
     private Map<String, Integer> baseSuppliesFor(ServerPlayer player) {
         return com.bhautik.mcagent.integration.VanillaStorage.storedTotals(
                 player, com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS);
@@ -1043,6 +1175,9 @@ public final class GoalService {
                 com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
                         com.bhautik.mcagent.planner.Planner.FURNACE_ITEM,
                         com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.blockLocator(player,
+                        com.bhautik.mcagent.planner.Planner.ENCHANTING_TABLE_ITEM,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS),
                 (x, y, z) -> player.distanceToSqr(x, y, z),
                 () -> player.level().getBiome(player.blockPosition()).unwrapKey()
                         .map(key -> key.identifier().toString()).orElse(""),
@@ -1050,7 +1185,11 @@ public final class GoalService {
                     @Override public int x() { return player.blockPosition().getX(); }
                     @Override public int z() { return player.blockPosition().getZ(); }
                 },
-                com.bhautik.mcagent.integration.VanillaEquipment.equipper(player));
+                com.bhautik.mcagent.integration.VanillaEquipment.equipper(player),
+                com.bhautik.mcagent.integration.VanillaHunter.hunter(player,
+                        com.bhautik.mcagent.integration.VanillaEquipment.equipper(player)),
+                com.bhautik.mcagent.integration.VanillaXpSensor.sensor(player),
+                com.bhautik.mcagent.integration.VanillaBreeder.breeder(player));
     }
 
     /**
@@ -1116,6 +1255,28 @@ public final class GoalService {
         return liveCountById(player.level().getServer(), player.getUUID(), activeRun.item.id());
     }
 
+    /** Enchanted copies of an item the agent carries (enchant verification). */
+    private static int enchantedCountById(MinecraftServer server, UUID playerId,
+                                          String itemId) {
+        ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+        if (player == null) {
+            return 0;
+        }
+        var inventory = player.getInventory();
+        int found = 0;
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+            var stack = inventory.getItem(slot);
+            if (stack.isEmpty() || stack.getEnchantments().isEmpty()) {
+                continue;
+            }
+            String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+            if (id.equals(itemId)) {
+                found += stack.getCount();
+            }
+        }
+        return found;
+    }
+
     private static int liveCountById(MinecraftServer server, UUID playerId, String itemId) {
         ServerPlayer player = server.getPlayerList().getPlayer(playerId);
         if (player == null) {
@@ -1176,6 +1337,10 @@ public final class GoalService {
         boolean stashing;
         /** Non-null while a hostile is being fought. */
         String combatTarget;
+        /** Non-null for enchant runs: the item id to enchant. */
+        String enchantItemId;
+        /** Lowest acceptable offer level for an enchant run. */
+        int enchantMinLevel = 1;
 
         ActiveRun(AgentGoal goal, MinecraftItem item, UUID playerId, int requested,
                   dev.minecraftai.agent.world.InventoryState snapshot, MinecraftServer server,
