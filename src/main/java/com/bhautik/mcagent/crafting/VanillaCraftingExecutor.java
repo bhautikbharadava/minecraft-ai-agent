@@ -22,6 +22,9 @@ import java.util.List;
  */
 public final class VanillaCraftingExecutor {
 
+    /** Slots that accept crafted output (excludes armor and offhand). */
+    private static final int MAIN_INVENTORY_SLOTS = 36;
+
     private VanillaCraftingExecutor() {
     }
 
@@ -57,19 +60,47 @@ public final class VanillaCraftingExecutor {
         if (holder == null) {
             return false;
         }
+        ItemStack result = holder.value().assemble(input);
+        if (result.isEmpty()) {
+            return false;
+        }
+        // Never craft into a full bag. Dropping the result on the ground
+        // loses it AND leaves the live count unchanged, so the action
+        // times out with "output never appeared" while the ingredients
+        // are already gone. Refusing instead lets the auto-stash detour
+        // make room and the craft retry.
+        if (!hasRoomFor(player, result)) {
+            return false;
+        }
         // Consume one item per occupied cell, then grant the result.
         for (ItemStack stack : placed) {
             if (!stack.isEmpty()) {
                 consumeOne(player, stack);
             }
         }
-        ItemStack result = holder.value().assemble(input);
-        if (!result.isEmpty()) {
-            if (!player.getInventory().add(result)) {
-                player.drop(result, false);
-            }
+        if (!player.getInventory().add(result)) {
+            player.drop(result, false); // room vanished mid-craft; better than deleting it
         }
         return true;
+    }
+
+    /** True when the main inventory can bank this result stack. */
+    private static boolean hasRoomFor(ServerPlayer player, ItemStack result) {
+        Container inventory = player.getInventory();
+        // Only the 36 main slots accept crafted output; armor and offhand
+        // slots would make an empty-slot scan lie.
+        int slots = Math.min(MAIN_INVENTORY_SLOTS, inventory.getContainerSize());
+        for (int slot = 0; slot < slots; slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            if (stack.isEmpty()) {
+                return true;
+            }
+            if (ItemStack.isSameItemSameComponents(stack, result)
+                    && stack.getCount() + result.getCount() <= stack.getMaxStackSize()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Peeks the first inventory stack accepted by this grid cell. */

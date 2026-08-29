@@ -18,6 +18,12 @@ import java.util.function.IntSupplier;
 public final class CraftAction implements AgentAction {
     /** Ticks without output progress after all crafts were issued before failing. */
     public static final int IDLE_TIMEOUT_TICKS = 100;
+    /**
+     * Consecutive refused crafts before giving up. Generous enough that
+     * the auto-stash detour (checked twice a second) can free a slot and
+     * let the craft proceed instead of failing the goal outright.
+     */
+    public static final int REFUSAL_STREAK = 60;
 
     /** Performs real grid crafting; returns the number of crafts completed. */
     public interface Crafter {
@@ -107,8 +113,11 @@ public final class CraftAction implements AgentAction {
             issued += completed;
             if (completed <= 0) {
                 failStreak++;
-                if (failStreak >= 20) {
-                    fail("crafting refused by game");
+                if (failStreak >= REFUSAL_STREAK) {
+                    // The crafter refuses for two real reasons: no room for
+                    // the output, or an ingredient went missing. Name both
+                    // rather than blaming "the game".
+                    fail("crafting refused (inventory full or ingredients missing)");
                 }
             } else {
                 failStreak = 0;
