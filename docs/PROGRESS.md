@@ -57,8 +57,9 @@ master.
 /agent base here                     set home anchor; place chest + table
 /agent stash <item> [count|all]      store items at the base chest
 /agent stash junk [all]              dump tunnel by-products preset
-/agent enchant <item> [level]        enchant goal: secures item + lapis +
-                                     table, enchants, collects the table
+/agent enchant <item> [level]        enchant goal: secures item + lapis,
+                                     builds a permanent enchanting table
+                                     at base, walks back to it, enchants
 /agent goal                          live goal progress
 /agent cancel                        stop goal + navigation
 ```

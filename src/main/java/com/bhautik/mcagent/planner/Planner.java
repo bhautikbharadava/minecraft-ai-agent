@@ -7,8 +7,10 @@ import com.bhautik.mcagent.action.EnchantAction;
 import com.bhautik.mcagent.action.Equipper;
 import com.bhautik.mcagent.action.BreedAction;
 import com.bhautik.mcagent.action.Breeder;
+import com.bhautik.mcagent.action.FluidHandler;
 import com.bhautik.mcagent.action.HuntAction;
 import com.bhautik.mcagent.action.Hunter;
+import com.bhautik.mcagent.action.MakeObsidianAction;
 import com.bhautik.mcagent.action.XpFarmAction;
 import com.bhautik.mcagent.action.MineAction;
 import com.bhautik.mcagent.action.MoveAction;
@@ -68,6 +70,10 @@ public final class Planner {
     public static final String BASE_CHEST_ITEM = "minecraft:chest";
     /** The block item the agent uses for enchanting. */
     public static final String ENCHANTING_TABLE_ITEM = "minecraft:enchanting_table";
+    /** Made from lava rather than searched for; see MakeObsidianAction. */
+    public static final String OBSIDIAN_ITEM = "minecraft:obsidian";
+    /** Bucket needed before any obsidian can be made. */
+    public static final String BUCKET_ITEM = "minecraft:bucket";
     /** Currency the enchanting table consumes per enchant (vanilla: 1-3). */
     public static final String LAPIS_ITEM = "minecraft:lapis_lazuli";
     /** Lapis secured before an enchant so every offer is payable. */
@@ -116,7 +122,11 @@ public final class Planner {
                               Equipper equipper,
                               Hunter hunter,
                               com.bhautik.mcagent.world.XpSensor xpSensor,
-                              Breeder breeder) {
+                              Breeder breeder,
+                              FluidHandler fluids,
+                              IntSupplier obsidianBlockCount,
+                              /** Same-ore blocks exposed near the agent, by block id. */
+                              Function<String, Integer> nearbyBlockCount) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -184,38 +194,9 @@ public final class Planner {
             expansion.expand(root.getKey(), root.getValue(), true);
         }
         List<AgentAction> plan = new ArrayList<>(expansion.plan);
-        // Torch upkeep (PRD 15 background tier): mining plans top torches
-        // back up first, when the recipe resolves and stock is low.
-        boolean minesSomething = plan.stream().anyMatch(step -> step instanceof MineAction);
-        int carriedTorches = Math.max(plannedCounts.apply(TORCH_ITEM), 0);
-        if (minesSomething && carriedTorches < MIN_TORCHES) {
-            Expansion torchRun = new Expansion(resolver, plannedCounts, ownedItemIds,
-                    liveCounts, environment);
-            try {
-                torchRun.expand(TORCH_ITEM, TORCH_STACK_TARGET - carriedTorches, true);
-                plan.addAll(0, torchRun.plan);
-                com.bhautik.mcagent.McAgent.LOGGER.info(
-                        "[Planner] Torch upkeep prepended (plan now {} steps)", plan.size());
-            } catch (PlanningException unresolvableTorches) {
-                // No torch route: mine anyway; survival handles the rest.
-            }
-        }
-        // Food upkeep: keep edibles stocked before mining-heavy goals, so
-        // starvation interrupts stay rare. Mirrors torch upkeep.
-        int carriedEdibles = Math.max(plannedCounts.apply(FOOD_UPKEEP_ITEM), 0);
         boolean goalIsFood = roots.stream().anyMatch(e -> FOOD_UPKEEP_ITEM.equals(e.getKey()));
-        if (!goalIsFood && minesSomething && carriedEdibles < MIN_EDIBLES) {
-            Expansion foodRun = new Expansion(resolver, plannedCounts, ownedItemIds,
-                    liveCounts, environment);
-            try {
-                foodRun.expand(FOOD_UPKEEP_ITEM, FOOD_STACK_TARGET - carriedEdibles, true);
-                plan.addAll(0, foodRun.plan);
-                com.bhautik.mcagent.McAgent.LOGGER.info(
-                        "[Planner] Food upkeep prepended (plan now {} steps)", plan.size());
-            } catch (PlanningException unresolvableFood) {
-                // No food route: proceed; survival handles the rest reactively.
-            }
-        }
+        prependUpkeep(plan, resolver, plannedCounts, ownedItemIds, liveCounts,
+                environment, goalIsFood);
         // A table or furnace this plan placed is picked back up once
         // everything else ran; pre-existing world blocks stay put.
         for (String placed : expansion.placedBlocks) {
@@ -244,7 +225,8 @@ public final class Planner {
                                          EnchantAction.Enchanter enchanter,
                                          IntSupplier enchantedCount,
                                          String itemId,
-                                         int minLevel) {
+                                         int minLevel,
+                                         BlockLocator.BlockSite homeSite) {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
         // The item itself: acquire it when the agent is not carrying one.
@@ -253,10 +235,12 @@ public final class Planner {
         if (carriedLapis < LAPIS_PER_ENCHANT) {
             expansion.expand(LAPIS_ITEM, LAPIS_PER_ENCHANT - carriedLapis, true);
         }
-        // Gather-before-place (design decisions log): every mining step is
-        // already queued, so placing the table now cannot be dug through.
-        expansion.planBlockAccess(ENCHANTING_TABLE_ITEM,
-                environment.enchantTableLocator());
+        // The enchanting setup is base infrastructure, not a portable tool:
+        // build it once at home and walk back to it, rather than dropping a
+        // table wherever the agent happens to stand and breaking it again.
+        // Gather-before-place still holds - every mining step is queued
+        // above, so the placement cannot be dug through.
+        expansion.planEnchantingSetup(homeSite);
 
         List<AgentAction> plan = new ArrayList<>(expansion.plan);
         // An explicit level request is a promise to reach it, so farm the
@@ -268,12 +252,62 @@ public final class Planner {
         }
         plan.add(new EnchantAction(itemId, minLevel, enchanter,
                 environment.enchantTableLocator()::isNearby, enchantedCount));
+        // Same upkeep every other mining plan gets: enchant chains dig for
+        // lapis, sugar cane and obsidian, so they need torches and food too.
+        prependUpkeep(plan, resolver, plannedCounts, ownedItemIds, liveCounts,
+                environment, false);
         for (String placed : expansion.placedBlocks) {
             plan.add(new BreakBlockAction(placed,
                     environment.breaker(),
                     () -> liveCounts.applyAsInt(placed)));
         }
         return plan;
+    }
+
+    /**
+     * Prepends torch and food upkeep to any mining plan (PRD 15
+     * background tier). Shared by every planning entry point — keeping
+     * this in one place is what stops a new plan type from silently
+     * shipping without upkeep, which is exactly how enchanting plans
+     * started digging with no torches.
+     */
+    private void prependUpkeep(List<AgentAction> plan, RecipeResolver resolver,
+                               Function<String, Integer> plannedCounts,
+                               Set<String> ownedItemIds,
+                               ToIntFunction<String> liveCounts,
+                               Environment environment, boolean goalIsFood) {
+        boolean minesSomething = plan.stream().anyMatch(step -> step instanceof MineAction);
+        if (!minesSomething) {
+            return;
+        }
+        int carriedTorches = Math.max(plannedCounts.apply(TORCH_ITEM), 0);
+        if (carriedTorches < MIN_TORCHES) {
+            Expansion torchRun = new Expansion(resolver, plannedCounts, ownedItemIds,
+                    liveCounts, environment);
+            try {
+                torchRun.expand(TORCH_ITEM, TORCH_STACK_TARGET - carriedTorches, true);
+                plan.addAll(0, torchRun.plan);
+                com.bhautik.mcagent.McAgent.LOGGER.info(
+                        "[Planner] Torch upkeep prepended (plan now {} steps)", plan.size());
+            } catch (PlanningException unresolvableTorches) {
+                // No torch route: mine anyway; survival handles the rest.
+            }
+        }
+        // Food upkeep: keep edibles stocked before mining-heavy goals, so
+        // starvation interrupts stay rare. Mirrors torch upkeep.
+        int carriedEdibles = Math.max(plannedCounts.apply(FOOD_UPKEEP_ITEM), 0);
+        if (!goalIsFood && carriedEdibles < MIN_EDIBLES) {
+            Expansion foodRun = new Expansion(resolver, plannedCounts, ownedItemIds,
+                    liveCounts, environment);
+            try {
+                foodRun.expand(FOOD_UPKEEP_ITEM, FOOD_STACK_TARGET - carriedEdibles, true);
+                plan.addAll(0, foodRun.plan);
+                com.bhautik.mcagent.McAgent.LOGGER.info(
+                        "[Planner] Food upkeep prepended (plan now {} steps)", plan.size());
+            } catch (PlanningException unresolvableFood) {
+                // No food route: proceed; survival handles the rest reactively.
+            }
+        }
     }
 
     /**
@@ -332,6 +366,19 @@ public final class Planner {
             }
             String sourceBlock = DirectAcquisitions.sourceBlockFor(itemId).orElse(null);
             if (sourceBlock != null) {
+                // Obsidian barely generates naturally, so searching for it is
+                // mostly walking. When lava is in range, make it the way
+                // players do - water on lava - then mine what we created.
+                if (OBSIDIAN_ITEM.equals(itemId)
+                        && environment.fluids().nearest(MakeObsidianAction.LAVA,
+                                MakeObsidianAction.SEARCH_RADIUS).isPresent()) {
+                    expand(BUCKET_ITEM, 1, false); // no bucket, no obsidian
+                    plan.add(new MakeObsidianAction(missing,
+                            environment.obsidianBlockCount(), environment.fluids(),
+                            baritoneIntegration, environment.distanceSensor()));
+                    com.bhautik.mcagent.McAgent.LOGGER.info(
+                            "[Planner] Obsidian will be made from lava (x{})", missing);
+                }
                 Set<String> ownedOrPlanned = itemsOwnedOrPlanned();
                 String toolReason = DirectAcquisitions.missingToolReason(itemId, ownedOrPlanned);
                 if (toolReason != null) {
@@ -351,11 +398,15 @@ public final class Planner {
                 String toolToHold = DirectAcquisitions
                         .qualifyingToolFor(itemId, itemsOwnedOrPlanned())
                         .orElse(null);
+                String vein = sourceBlock;
                 plan.add(new MineAction(sourceBlock, have, have + missing,
                         () -> liveCounts.applyAsInt(itemId), baritoneIntegration,
                         toolToHold,
                         environment.anchor(),
-                        environment.equipper()));
+                        environment.equipper(),
+                        // Finish the vein we walked to instead of leaving
+                        // exposed ore behind for another trip.
+                        () -> environment.nearbyBlockCount().apply(vein)));
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }
@@ -464,6 +515,41 @@ public final class Planner {
          * the item and place it — at most one placement per block per
          * plan. Walks may repeat; arrival checks make repeats free.
          */
+        /**
+         * Secures a permanent enchanting table. Prefers one already in
+         * reach, then any standing nearby, and otherwise crafts one and
+         * places it at the home base so future enchants just walk back.
+         * Unlike crafting tables and furnaces it is never added to
+         * {@code placedBlocks}, so it is not collected afterwards.
+         */
+        private void planEnchantingSetup(BlockLocator.BlockSite homeSite) {
+            BlockLocator locator = environment.enchantTableLocator();
+            if (locator.isNearby()) {
+                return;
+            }
+            var standing = locator.nearestWithin(BLOCK_SEARCH_RADIUS);
+            if (standing.isPresent()) {
+                walkTo(ENCHANTING_TABLE_ITEM,
+                        locator.approachFor(standing.get()).orElse(standing.get()));
+                return;
+            }
+            expand(ENCHANTING_TABLE_ITEM, 1, false);
+            if (homeSite != null) {
+                walkTo("base", homeSite);
+            }
+            plan.add(new PlaceBlockAction(ENCHANTING_TABLE_ITEM,
+                    environment.placer(), locator));
+        }
+
+        /** Walks to a block-adjacent spot and verifies arrival by distance. */
+        private void walkTo(String label, BlockLocator.BlockSite site) {
+            plan.add(new MoveAction(label, site.x(), site.y(), site.z(),
+                    BLOCK_ARRIVE_DISTANCE_SQ,
+                    () -> environment.distanceSensor()
+                            .distanceSquaredTo(site.x(), site.y(), site.z()),
+                    baritoneIntegration));
+        }
+
         private void planBlockAccess(String blockItemId, BlockLocator locator) {
             if (locator.isNearby()) {
                 return;

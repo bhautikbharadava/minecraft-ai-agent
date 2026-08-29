@@ -61,7 +61,7 @@ swapped for any navigation backend.
 /agent base here                    set home anchor; place chest + crafting table
 /agent stash <item|junk> [count]    store items at the base chest
 /agent enchant <item> [level]       enchant goal: secures item + lapis +
-                                    enchanting table, enchants, collects table
+                                    permanent enchanting table at base, enchants there
 /agent goal                         live goal progress
 /agent cancel                       stop goal + navigation
 ```

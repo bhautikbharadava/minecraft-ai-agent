@@ -615,6 +615,21 @@ public final class AgentCli {
                 () -> "minecraft:plains", 5, 7);
     }
 
+    /** Environment variant with a controllable fluid handler. */
+    private static com.bhautik.mcagent.planner.Planner.Environment envWithFluids(
+            CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
+            com.bhautik.mcagent.world.BlockLocator locator,
+            com.bhautik.mcagent.action.FluidHandler fluids) {
+        var base = env(crafter, placer, locator);
+        return new com.bhautik.mcagent.planner.Planner.Environment(
+                base.crafter(), base.smelter(), base.placer(), base.breaker(),
+                base.resolver(), base.smeltingResolver(), base.tableLocator(),
+                base.furnaceLocator(), base.enchantTableLocator(),
+                base.distanceSensor(), base.biomeSensor(), base.anchor(),
+                base.equipper(), base.hunter(), base.xpSensor(), base.breeder(),
+                fluids, base.obsidianBlockCount(), base.nearbyBlockCount());
+    }
+
     /** Environment variant with a controllable biome and anchor. */
     private static com.bhautik.mcagent.planner.Planner.Environment env(
             CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
@@ -642,7 +657,10 @@ public final class AgentCli {
                 itemId -> true,
                 com.bhautik.mcagent.action.Hunter.NONE,
                 com.bhautik.mcagent.world.XpSensor.NONE,
-                com.bhautik.mcagent.action.Breeder.NONE);
+                com.bhautik.mcagent.action.Breeder.NONE,
+                com.bhautik.mcagent.action.FluidHandler.NONE,
+                () -> 0,
+                blockId -> 0);
     }
 
     /** A smelter that always reports success. */
@@ -1074,6 +1092,138 @@ public final class AgentCli {
             throw new IllegalStateException(
                     "kill did not trigger a detour to collect the drop");
         }
+
+        // Regression: every mining plan gets torch upkeep, including the
+        // enchant path. It shipped without any, so enchant chains dug for
+        // lapis and obsidian with no torches.
+        Map<String, CraftableRecipe> upkeepRecipes = new HashMap<>(recipes);
+        upkeepRecipes.put("minecraft:torch", recipe("minecraft:torch", 4,
+                cell("minecraft:coal"), cell("minecraft:stick")));
+        upkeepRecipes.put("minecraft:stick", recipe("minecraft:stick", 4,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
+        upkeepRecipes.put("minecraft:oak_planks", recipe("minecraft:oak_planks", 4,
+                cell("minecraft:oak_log")));
+        upkeepRecipes.put("minecraft:enchanting_table",
+                tableRecipe("minecraft:enchanting_table", 1,
+                        cell("minecraft:book"), cell("minecraft:diamond"),
+                        cell("minecraft:obsidian")));
+        com.bhautik.mcagent.crafting.RecipeResolver upkeepResolver =
+                new com.bhautik.mcagent.crafting.RecipeResolver() {
+                    @Override public Grid grid() { return Grid.INVENTORY_2X2; }
+                    @Override public Optional<CraftableRecipe> findRecipe(String id) {
+                        return Optional.ofNullable(upkeepRecipes.get(id));
+                    }
+                };
+        // The agent already carries the item to enchant, a table to place
+        // and a pickaxe; only lapis has to be mined, which is what makes
+        // this a mining plan and so demands upkeep.
+        java.util.function.Function<String, Integer> carried = id -> switch (id) {
+            case "minecraft:diamond_sword", "minecraft:diamond_pickaxe",
+                 "minecraft:enchanting_table" -> 1;
+            default -> 0;
+        };
+        List<AgentAction> enchantPlan = planner.planEnchant(
+                upkeepResolver, carried, Set.of("minecraft:diamond_pickaxe"),
+                id -> 0, environment,
+                (item, level) -> com.bhautik.mcagent.action.EnchantAction.Enchanter
+                        .Result.ok(),
+                () -> 0, "minecraft:diamond_sword", 1, null);
+        boolean topsUpTorches = enchantPlan.stream()
+                .anyMatch(step -> step.title().contains("torch"));
+        if (!topsUpTorches) {
+            throw new IllegalStateException("enchant plan skipped torch upkeep: "
+                    + enchantPlan.stream().map(AgentAction::title).toList());
+        }
+
+        // Obsidian is made from lava when a source is in range, and only
+        // searched for when none is. Natural obsidian is scarce, so
+        // mining for it is mostly walking.
+        com.bhautik.mcagent.action.FluidHandler lavaNearby =
+                new com.bhautik.mcagent.action.FluidHandler() {
+                    @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
+                            nearest(String fluidId, int radius) {
+                        return com.bhautik.mcagent.action.MakeObsidianAction.LAVA.equals(fluidId)
+                                ? Optional.of(new com.bhautik.mcagent.world.BlockLocator
+                                        .BlockSite(5, 60, 5))
+                                : Optional.empty();
+                    }
+                    @Override public boolean fillFrom(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite site) {
+                        return true;
+                    }
+                    @Override public boolean pourOnto(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite site) {
+                        return true;
+                    }
+                    @Override public boolean carriesWater() {
+                        return false;
+                    }
+                };
+        var lavaEnv = envWithFluids(crafter, placer,
+                com.bhautik.mcagent.world.BlockLocator.NONE, lavaNearby);
+        List<AgentAction> madePlan = planner.planAcquisition(resolver,
+                id -> id.equals("minecraft:bucket") ? 1 : 0,
+                Set.of("minecraft:diamond_pickaxe"), id -> 0, lavaEnv,
+                "minecraft:obsidian", 4);
+        var makeStep = madePlan.stream()
+                .filter(step -> step instanceof com.bhautik.mcagent.action.MakeObsidianAction)
+                .findFirst().orElse(null);
+        if (makeStep == null) {
+            throw new IllegalStateException("obsidian plan never makes it from lava: "
+                    + madePlan.stream().map(AgentAction::title).toList());
+        }
+        // The plan keeps a mine step behind it, so a failed pour must fall
+        // through to mining rather than sinking the goal.
+        if (!makeStep.bestEffort()) {
+            throw new IllegalStateException("make-obsidian must be best-effort so the"
+                    + " mining fallback still runs");
+        }
+        boolean keepsMiningFallback = madePlan.stream()
+                .anyMatch(step -> step.title().contains("Mine") && step.title().contains("obsidian"));
+        if (!keepsMiningFallback) {
+            throw new IllegalStateException("no mining fallback behind make-obsidian: "
+                    + madePlan.stream().map(AgentAction::title).toList());
+        }
+        // Without lava it falls back to mining whatever generated naturally.
+        List<AgentAction> minedPlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of("minecraft:diamond_pickaxe"), id -> 0, environment,
+                "minecraft:obsidian", 4);
+        boolean fallsBack = minedPlan.stream()
+                .noneMatch(step -> step instanceof com.bhautik.mcagent.action.MakeObsidianAction);
+        if (!fallsBack) {
+            throw new IllegalStateException("obsidian should be mined when no lava is near");
+        }
+
+        // Vein mining: reaching the target with ore still exposed nearby
+        // keeps digging (the walk there is the expensive part), but stops
+        // once the vein is gone and never exceeds the bonus cap.
+        FakeBackend veinBackend = new FakeBackend();
+        int[] mined = {0};
+        int[] exposed = {5};
+        var veinRun = new com.bhautik.mcagent.action.MineAction(
+                "minecraft:diamond_ore", 0, 2, () -> mined[0], veinBackend,
+                null, null, null, () -> exposed[0]);
+        veinRun.start();
+        mined[0] = 2;            // goal met, but 5 ore still exposed
+        veinRun.tick();
+        assertEquals(veinRun.status(), com.bhautik.mcagent.action.ActionStatus.RUNNING,
+                "vein still exposed keeps mining");
+        mined[0] = 7;            // took the vein
+        exposed[0] = 0;          // nothing left
+        veinRun.tick();
+        assertEquals(veinRun.status(), com.bhautik.mcagent.action.ActionStatus.SUCCESS,
+                "exhausted vein finishes the action");
+
+        // With no ore nearby it stops exactly at the requested count.
+        int[] lone = {0};
+        var loneRun = new com.bhautik.mcagent.action.MineAction(
+                "minecraft:diamond_ore", 0, 2, () -> lone[0], new FakeBackend(),
+                null, null, null, () -> 0);
+        loneRun.start();
+        lone[0] = 2;
+        loneRun.tick();
+        assertEquals(loneRun.status(), com.bhautik.mcagent.action.ActionStatus.SUCCESS,
+                "no vein nearby stops at the target");
 
         // Items with no block AND no mob source still fail honestly.
         try {

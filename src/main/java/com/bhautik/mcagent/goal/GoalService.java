@@ -10,6 +10,7 @@ import com.bhautik.mcagent.executor.AgentExecutor;
 import com.bhautik.mcagent.integration.VanillaSurvivalMonitor;
 import com.bhautik.mcagent.state.InventoryState;
 import com.bhautik.mcagent.survival.Threat;
+import com.bhautik.mcagent.world.BlockLocator;
 import dev.minecraftai.agent.goal.AgentGoal;
 import dev.minecraftai.agent.goal.AgentGoalManager;
 import dev.minecraftai.agent.goal.EnchantGoal;
@@ -42,6 +43,12 @@ import java.util.UUID;
 public final class GoalService {
     private static final int PROGRESS_REFRESH_INTERVAL_TICKS = 20;
     private static final int MAX_PLAN_ATTEMPTS = 3;
+    /**
+     * How far around the agent counts as "the same vein". Small on
+     * purpose: this is for ore already exposed where it is standing, not
+     * a reason to go prospecting.
+     */
+    private static final int VEIN_SCAN_RADIUS = 6;
     private static final int SURVIVAL_CHECK_INTERVAL_TICKS = 10;
     /** Hostiles within this distance get engaged in melee (combat v0). */
     private static final double COMBAT_RANGE = 4.0;
@@ -791,6 +798,11 @@ public final class GoalService {
         // Reality first (PRD 14): if the goal is already satisfied, no
         // failure below matters.
         if (finished.status() != ActionStatus.CANCELLED && isSatisfied(activeRun, current)) {
+            if (activeRun.enchantItemId != null) {
+                // The table the agent just used becomes permanent base
+                // infrastructure, so later enchants walk back to it.
+                rememberEnchantTable(player);
+            }
             activeRun.goal.markSuccess();
             McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
             run = null;
@@ -861,10 +873,17 @@ public final class GoalService {
         } else if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
             McAgent.LOGGER.info("[Recovery] Retrying with a fresh plan");
         } else {
-            activeRun.goal.markFailed(activeRun.exploreTargetBiome != null
-                    ? "target biome not reached after all attempts"
-                    : "verified inventory has " + current + "/" + activeRun.requested
-                            + " after all attempts");
+            String reason;
+            if (activeRun.exploreTargetBiome != null) {
+                reason = "target biome not reached after all attempts";
+            } else if (activeRun.enchantItemId != null) {
+                reason = shortName(activeRun.enchantItemId)
+                        + " was not enchanted after all attempts";
+            } else {
+                reason = "verified inventory has " + current + "/"
+                        + activeRun.requested + " after all attempts";
+            }
+            activeRun.goal.markFailed(reason);
             run = null;
         }
     }
@@ -881,14 +900,18 @@ public final class GoalService {
                     liveCountById(activeRun.server, activeRun.playerId, piece.id())
                             >= activeRun.requested);
         }
+        if (activeRun.enchantItemId != null) {
+            // Carrying the item is not the goal - carrying an ENCHANTED one
+            // is. The generic count check below is true from the start,
+            // which declared success before anything was enchanted.
+            return enchantedCountById(activeRun.server, activeRun.playerId,
+                    activeRun.enchantItemId) > 0;
+        }
         if (activeRun.restockIds != null || activeRun.stashIds != null) {
             return runQueueIsEmpty(activeRun);
         }
         if (activeRun.exploreTargetBiome != null) {
             return activeRun.exploreTargetBiome.equals(activeRun.biomeAt.current());
-        }
-        if (activeRun.stashIds != null) {
-            return runQueueIsEmpty(activeRun);
         }
         if (activeRun.structureTargetPos != null) {
             return activeRun.structureDistance.getAsDouble()
@@ -972,7 +995,8 @@ public final class GoalService {
                             environment.enchantTableLocator()),
                     () -> enchantedCountById(activeRun.server, activeRun.playerId, target),
                     target,
-                    activeRun.enchantMinLevel);
+                    activeRun.enchantMinLevel,
+                    enchantingSiteFor(activeRun.server));
             McAgent.LOGGER.info("[Planner] Enchant plan generated: {}",
                     actions.stream().map(AgentAction::title).toList());
             return actions;
@@ -1126,6 +1150,53 @@ public final class GoalService {
         return useful;
     }
 
+    /**
+     * Where the enchanting setup lives: the table already built at base
+     * if there is one, otherwise the base anchor so a new table gets
+     * built at home rather than wherever the agent is standing.
+     * Null when no base has been set - the plan then places it in place.
+     */
+    private BlockLocator.BlockSite enchantingSiteFor(MinecraftServer server) {
+        if (server == null) {
+            return null;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        int[] table = state.enchantTable();
+        if (table != null) {
+            return new BlockLocator.BlockSite(table[0], table[1], table[2]);
+        }
+        int[] anchor = state.anchor();
+        if (anchor[0] == 0 && anchor[1] == 0 && anchor[2] == 0) {
+            return null; // no base set yet
+        }
+        return new BlockLocator.BlockSite(anchor[0], anchor[1], anchor[2]);
+    }
+
+    /** Remembers a freshly built enchanting table as base infrastructure. */
+    private void rememberEnchantTable(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        var server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        if (state.hasEnchantTable()) {
+            return;
+        }
+        com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                .blockLocator(player, com.bhautik.mcagent.planner.Planner.ENCHANTING_TABLE_ITEM,
+                        com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS)
+                .nearestWithin(com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                        .INTERACTION_RADIUS)
+                .ifPresent(site -> {
+                    state.setEnchantTable(site.x(), site.y(), site.z());
+                    McAgent.LOGGER.info("[Agent] Enchanting table recorded at {} {} {}",
+                            site.x(), site.y(), site.z());
+                });
+    }
+
     private Map<String, Integer> baseSuppliesFor(ServerPlayer player) {
         return com.bhautik.mcagent.integration.VanillaStorage.storedTotals(
                 player, com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS);
@@ -1189,7 +1260,14 @@ public final class GoalService {
                 com.bhautik.mcagent.integration.VanillaHunter.hunter(player,
                         com.bhautik.mcagent.integration.VanillaEquipment.equipper(player)),
                 com.bhautik.mcagent.integration.VanillaXpSensor.sensor(player),
-                com.bhautik.mcagent.integration.VanillaBreeder.breeder(player));
+                com.bhautik.mcagent.integration.VanillaBreeder.breeder(player),
+                com.bhautik.mcagent.integration.VanillaFluidHandler.handler(player),
+                () -> com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                        .blockCount(player,
+                                com.bhautik.mcagent.planner.Planner.OBSIDIAN_ITEM,
+                                com.bhautik.mcagent.action.MakeObsidianAction.SEARCH_RADIUS),
+                blockId -> com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                        .blockCount(player, blockId, VEIN_SCAN_RADIUS));
     }
 
     /**
