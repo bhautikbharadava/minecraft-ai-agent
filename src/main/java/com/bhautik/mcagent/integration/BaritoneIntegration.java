@@ -95,13 +95,17 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
     private final Object mineProcess;
     private final Object goalProcess;
     private final Object exploreProcess;
+    /** Baritone's own "stop everything" handle; the reliable cancel path. */
+    private final Object pathingBehavior;
     private final String initFailure;
 
     private ReflectiveBaritoneIntegration(Object mineProcess, Object goalProcess,
-                                          Object exploreProcess, String initFailure) {
+                                          Object exploreProcess, Object pathingBehavior,
+                                          String initFailure) {
         this.mineProcess = mineProcess;
         this.goalProcess = goalProcess;
         this.exploreProcess = exploreProcess;
+        this.pathingBehavior = pathingBehavior;
         this.initFailure = initFailure;
     }
 
@@ -128,17 +132,25 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
             } catch (Throwable ignored) {
                 // exploration unsupported; the rest may still work
             }
+            Object pathing = null;
+            try {
+                pathing = baritone.getClass().getMethod("getPathingBehavior")
+                        .invoke(baritone);
+            } catch (Throwable ignored) {
+                // Older/newer builds may not expose it; per-process cancel
+                // is then the only stop available.
+            }
             if (mine == null && goal == null && explore == null) {
-                return new ReflectiveBaritoneIntegration(null, null, null,
+                return new ReflectiveBaritoneIntegration(null, null, null, pathing,
                         "no usable Baritone processes found");
             }
-            return new ReflectiveBaritoneIntegration(mine, goal, explore, null);
+            return new ReflectiveBaritoneIntegration(mine, goal, explore, pathing, null);
         } catch (Throwable throwable) {
             Throwable root = throwable;
             while (root.getCause() != null) {
                 root = root.getCause();
             }
-            return new ReflectiveBaritoneIntegration(null, null, null,
+            return new ReflectiveBaritoneIntegration(null, null, null, null,
                     "Baritone not detected (" + root.getClass().getSimpleName() + ")");
         }
     }
@@ -256,19 +268,41 @@ final class ReflectiveBaritoneIntegration implements BaritoneIntegration {
 
     @Override
     public void stop() {
+        boolean stopped = false;
+        // Canonical stop first: not every process type exposes a no-arg
+        // cancel(), and silently failing to stop leaves the agent walking
+        // after /agent cancel.
+        if (pathingBehavior != null) {
+            stopped = invokeNoArg(pathingBehavior, "cancelEverything");
+        }
         for (Object process : new Object[]{mineProcess, goalProcess, exploreProcess}) {
             if (process == null) {
                 continue;
             }
-            try {
-                Method cancel = findMethod(process.getClass(), "cancel", new Class<?>[0]);
-                if (cancel != null) {
-                    cancel.setAccessible(true);
-                    runOnClientThread(() -> cancel.invoke(process));
-                }
-            } catch (Throwable ignored) {
-                // Best-effort stop; verification still guards goal completion.
+            // onLostControl is the IBaritoneProcess-wide way to relinquish.
+            boolean cancelled = invokeNoArg(process, "cancel");
+            stopped |= cancelled | invokeNoArg(process, "onLostControl");
+        }
+        if (!stopped) {
+            McAgent.LOGGER.warn("[Agent] Navigation stop found no usable "
+                    + "Baritone cancel method; the agent may keep pathing");
+        }
+    }
+
+    /** Best-effort no-arg reflective call; true when it actually ran. */
+    private boolean invokeNoArg(Object target, String methodName) {
+        try {
+            Method method = findMethod(target.getClass(), methodName, new Class<?>[0]);
+            if (method == null) {
+                return false;
             }
+            method.setAccessible(true);
+            runOnClientThread(() -> method.invoke(target));
+            return true;
+        } catch (Throwable throwable) {
+            McAgent.LOGGER.warn("Baritone {} failed: {}", methodName,
+                    String.valueOf(rootOf(throwable)));
+            return false;
         }
     }
 

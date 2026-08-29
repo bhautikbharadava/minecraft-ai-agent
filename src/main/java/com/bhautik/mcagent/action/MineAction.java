@@ -14,6 +14,11 @@ public final class MineAction implements AgentAction {
     /** Ticks without inventory progress before the backend is re-issued or the action fails. */
     public static final int IDLE_TIMEOUT_TICKS = 600;
     public static final int MAX_ISSUE_ATTEMPTS = 2;
+    /**
+     * Most extra ore taken from a vein once the goal is already met.
+     * Bounded so a rich deposit cannot turn "mine 2" into an endless dig.
+     */
+    public static final int MAX_VEIN_BONUS = 12;
     private final String title;
     private final String sourceBlockName;
     private final int targetTotal;
@@ -22,7 +27,11 @@ public final class MineAction implements AgentAction {
     private final String preferredToolItemId;
     private final Equipper equipper;
     private final com.bhautik.mcagent.world.PositionAnchor anchor;
+    /** Same-ore blocks still exposed nearby; null disables vein mining. */
+    private final IntSupplier nearbyOreCount;
 
+    private int veinBonus;
+    private int veinTarget;
     private ActionStatus status = ActionStatus.PENDING;
     private String failureReason;
     private int issuesUsed;
@@ -52,6 +61,17 @@ public final class MineAction implements AgentAction {
                       String preferredToolItemId,
                       com.bhautik.mcagent.world.PositionAnchor anchor,
                       Equipper equipper) {
+        this(sourceBlockName, baselineCount, targetTotal, liveCount, backend,
+                preferredToolItemId, anchor, equipper, null);
+    }
+
+    public MineAction(String sourceBlockName, int baselineCount, int targetTotal,
+                      IntSupplier liveCount, BaritoneIntegration backend,
+                      String preferredToolItemId,
+                      com.bhautik.mcagent.world.PositionAnchor anchor,
+                      Equipper equipper,
+                      IntSupplier nearbyOreCount) {
+        this.nearbyOreCount = nearbyOreCount;
         this.sourceBlockName = sourceBlockName;
         this.targetTotal = targetTotal;
         this.liveCount = liveCount;
@@ -96,9 +116,16 @@ public final class MineAction implements AgentAction {
         ticksSinceStart++;
         int count = Math.max(liveCount.getAsInt(), 0);
         if (count >= targetTotal) {
+            // Ore generates in veins, and the walk there is the expensive
+            // part. If more of the same ore is still exposed within reach,
+            // finish the vein instead of leaving it for another trip.
+            if (finishVein(count)) {
+                return;
+            }
             backend.stop();
             status = ActionStatus.SUCCESS;
-            McAgent.LOGGER.info("[Action] Verified success: {} (inventory {})", title, count);
+            McAgent.LOGGER.info("[Action] Verified success: {} (inventory {}{})",
+                    title, count, veinBonus > 0 ? ", +" + veinBonus + " from vein" : "");
             return;
         }
         // Traveling toward the target IS progress: searching far veins
@@ -138,10 +165,43 @@ public final class MineAction implements AgentAction {
         }
     }
 
+    /**
+     * Keeps mining while the vein that satisfied the goal still has ore
+     * exposed nearby. Bounded by {@link #MAX_VEIN_BONUS} so a huge
+     * deposit cannot turn a small request into an endless dig, and by
+     * the caller supplying no scanner at all (then this never engages).
+     *
+     * @return true when the action should keep running
+     */
+    private boolean finishVein(int count) {
+        if (nearbyOreCount == null || veinBonus >= MAX_VEIN_BONUS) {
+            return false;
+        }
+        int exposed = Math.max(nearbyOreCount.getAsInt(), 0);
+        if (exposed <= 0) {
+            return false;
+        }
+        if (veinTarget <= count) {
+            // Take what is exposed, capped, and keep the existing mine
+            // order running toward the raised target.
+            int extra = Math.min(exposed, MAX_VEIN_BONUS - veinBonus);
+            veinBonus += extra;
+            veinTarget = count + extra;
+            McAgent.LOGGER.info("[Action] Vein continues ({} more {} exposed); mining on",
+                    extra, sourceBlockName.replaceFirst("^minecraft:", ""));
+            issue(veinTarget);
+        }
+        return count < veinTarget;
+    }
+
     private void issue() {
+        issue(targetTotal);
+    }
+
+    private void issue(int target) {
         issuesUsed++;
         lastCount = Math.max(liveCount.getAsInt(), 0);
-        int missing = targetTotal - lastCount;
+        int missing = target - lastCount;
         if (missing <= 0) {
             status = ActionStatus.SUCCESS;
             return;

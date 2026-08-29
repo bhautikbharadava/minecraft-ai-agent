@@ -33,6 +33,11 @@ master.
 | Base camp + storage + auto-stash | (M11 groundwork) | ✅ Done (persisted) | master |
 | Restock from base | `/agent restock torches/food/<item>` | ✅ Done | master |
 | Base-supply crediting in plans | goals started at base use stored items | ✅ Done | master |
+| Enchanting E1 XP sensing | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
+| Enchanting E5 enchant goal (acts: item + lapis + table + enchant) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
+| Enchanting E3 leather (cow hunting) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
+| Enchanting E2 XP farming | [ENCHANTING.md](ENCHANTING.md) | ✅ Done (ore mining; low levels only) | feat/enchanting |
+| Enchanting E6/E7 (bookshelf ring, villager trading) | [ENCHANTING.md](ENCHANTING.md) | ⬜ Designed, not built | - |
 | M10 Building foundation | §17 M10 | ⬜ Backlog | - |
 | M11 Farm building | §16 UC-11, §17 M11 | ⬜ Backlog | - |
 | M12 Natural language | §18, §17 M12 | ⬜ Backlog | - |
@@ -52,6 +57,9 @@ master.
 /agent base here                     set home anchor; place chest + table
 /agent stash <item> [count|all]      store items at the base chest
 /agent stash junk [all]              dump tunnel by-products preset
+/agent enchant <item> [level]        enchant goal: secures item + lapis,
+                                     builds a permanent enchanting table
+                                     at base, walks back to it, enchants
 /agent goal                          live goal progress
 /agent cancel                        stop goal + navigation
 ```
@@ -68,6 +76,13 @@ master.
 - Survival interrupts (every 0.5 s): low health/hunger -> eat/wait; low
   oxygen -> swim up; starving with no food -> forage berries/mushrooms;
   all resume the interrupted action afterwards
+- Hunting: items with no source block (leather, raw meat) route to a
+  hunt - roam to find a herd, strike, collect the drops, repeat until
+  the inventory count is met. Always leaves 2 animals alive so the local
+  herd is never wiped
+- Breeding: when the breeding food is carried (wheat for cows/sheep,
+  carrots for pigs, seeds for chickens), the plan grows the herd before
+  harvesting it
 - Auto-stash: free slots < 3 mid-goal -> detour to base chest, dump junk
   list, resume
 - Death: goal fails honestly with death location (loot drops vanilla-style)
@@ -78,7 +93,19 @@ master.
 
 - Water crossings are swim-only; boat sailing was scrapped (see decisions)
 - Combat is melee-only v0 (no bow/shield/flee); agent strikes nearby hostiles
-- Enchanting entirely unsupported (XP, table use, book/leather chain)
+- Enchanting self-provisions the item, lapis, leather and the table.
+  `/agent enchant <item>` spends whatever XP is on hand; passing a level
+  farms the shortfall by mining coal ore. **Ore XP is slow** (level 30 =
+  1395 points, roughly a thousand ore blocks), so high level targets give
+  up with a progress report rather than digging forever - a mob grinder
+  is the realistic route and is not built. Bookshelf rings are not placed,
+  so offers stay in the low range
+- Hunting roams to find prey and always spares a breeding pair, and it
+  breeds beforehand when the right food is already carried. It is not a
+  closed loop yet: **wheat cannot be grown**, only found (wild wheat is
+  village-farm only), so renewable leather still depends on a wheat
+  supply. Growing crops is the farming milestone (M11)
+- No pen or enclosure is built; bred animals wander freely
 - Netherite unreachable (smithing + nether not implemented)
 - Auto-restock before goals is command-driven only (`/agent restock`);
   automatic pre-goal restocking is a future refinement
@@ -101,7 +128,7 @@ master.
 | 5 | M10 Building foundation | blueprint placement + structure verification | M-L | ⬜ |
 | 6 | Kit expansion | gold/mixed kits ("starter kit") | S | ⬜ |
 | 7 | Cave exploration | exposed-ore seeking, y-level targeting | L | ⬜ |
-| 8 | Enchanting | XP tracking + table interaction + book chain | L | ⬜ |
+| 8 | Enchanting | XP tracking + table interaction + book chain; designed in [ENCHANTING.md](ENCHANTING.md), slice E1 (XP sensing + readiness) done | L | 🟡 E1 |
 | 9 | Nether progression | portals, fortresses, netherite (UC-10 endgame) | XL | ⬜ |
 | 10 | Natural language | parser/LLM front-end (§18) | L | ⬜ |
 

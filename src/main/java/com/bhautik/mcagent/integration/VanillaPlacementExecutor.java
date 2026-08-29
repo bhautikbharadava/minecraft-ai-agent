@@ -37,6 +37,34 @@ public final class VanillaPlacementExecutor {
     private VanillaPlacementExecutor() {
     }
 
+    /**
+     * Counts matching blocks standing within radius. Used to verify work
+     * that produces blocks rather than items — making obsidian shows up
+     * in the world first and only reaches the inventory once mined.
+     */
+    public static int blockCount(ServerPlayer player, String blockItemId, int radius) {
+        var id = net.minecraft.resources.Identifier.tryParse(blockItemId);
+        var block = id == null ? null
+                : net.minecraft.core.registries.BuiltInRegistries.BLOCK.getOptional(id)
+                        .orElse(null);
+        if (block == null) {
+            return 0;
+        }
+        var level = player.level();
+        var origin = player.blockPosition();
+        int found = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (level.getBlockState(origin.offset(dx, dy, dz)).is(block)) {
+                        found++;
+                    }
+                }
+            }
+        }
+        return found;
+    }
+
     /** Locator for a specific block item id ("minecraft:crafting_table"). */
     public static BlockLocator blockLocator(ServerPlayer player, String blockItemId,
                                             int radius) {

@@ -40,6 +40,8 @@ public final class AgentCli {
             validateDependencyPlanning();
             validateSurvivalInterruptions();
             validateExploration();
+            validateXpSensing();
+            validateHunting();
             return;
         }
         System.out.println(handler.handle(String.join(" ", args)));
@@ -613,6 +615,21 @@ public final class AgentCli {
                 () -> "minecraft:plains", 5, 7);
     }
 
+    /** Environment variant with a controllable fluid handler. */
+    private static com.bhautik.mcagent.planner.Planner.Environment envWithFluids(
+            CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
+            com.bhautik.mcagent.world.BlockLocator locator,
+            com.bhautik.mcagent.action.FluidHandler fluids) {
+        var base = env(crafter, placer, locator);
+        return new com.bhautik.mcagent.planner.Planner.Environment(
+                base.crafter(), base.smelter(), base.placer(), base.breaker(),
+                base.resolver(), base.smeltingResolver(), base.tableLocator(),
+                base.furnaceLocator(), base.enchantTableLocator(),
+                base.distanceSensor(), base.biomeSensor(), base.anchor(),
+                base.equipper(), base.hunter(), base.xpSensor(), base.breeder(),
+                fluids, base.obsidianBlockCount(), base.nearbyBlockCount());
+    }
+
     /** Environment variant with a controllable biome and anchor. */
     private static com.bhautik.mcagent.planner.Planner.Environment env(
             CraftAction.Crafter crafter, PlaceBlockAction.Placer placer,
@@ -631,13 +648,19 @@ public final class AgentCli {
                     }
                 },
                 smelting,
-                locator, locator, (x, y, z) -> 100.0,
+                locator, locator, locator, (x, y, z) -> 100.0,
                 biome::get,
                 new com.bhautik.mcagent.world.PositionAnchor() {
                     @Override public int x() { return anchorX; }
                     @Override public int z() { return anchorZ; }
                 },
-                itemId -> true);
+                itemId -> true,
+                com.bhautik.mcagent.action.Hunter.NONE,
+                com.bhautik.mcagent.world.XpSensor.NONE,
+                com.bhautik.mcagent.action.Breeder.NONE,
+                com.bhautik.mcagent.action.FluidHandler.NONE,
+                () -> 0,
+                blockId -> 0);
     }
 
     /** A smelter that always reports success. */
@@ -921,6 +944,323 @@ public final class AgentCli {
         return new CraftableRecipe(output, resultCount, width, height, true, cells);
     }
 
+    /**
+     * Slice E1 (docs/ENCHANTING.md): the XP seam the enchant readiness
+     * check and the later XP farm both read. Curve values are the
+     * vanilla points-to-level totals, so "N points to go" is honest.
+     */
+    /**
+     * Mob drops (E3): leather has no source block, so the planner must
+     * route it through a hunt instead of failing with "no supported
+     * acquisition strategy" — which is what blocked the enchanting-table
+     * chain before cow hunting existed.
+     */
+    private static void validateHunting() {
+        com.bhautik.mcagent.planner.Planner planner =
+                new com.bhautik.mcagent.planner.Planner(new FakeBackend());
+        Map<String, CraftableRecipe> recipes = new HashMap<>();
+        recipes.put("minecraft:paper", recipe("minecraft:paper", 3,
+                cell("minecraft:sugar_cane"), cell("minecraft:sugar_cane"),
+                cell("minecraft:sugar_cane")));
+        recipes.put("minecraft:book", recipe("minecraft:book", 1,
+                cell("minecraft:paper"), cell("minecraft:paper"),
+                cell("minecraft:paper"), cell("minecraft:leather")));
+        com.bhautik.mcagent.crafting.RecipeResolver resolver =
+                new com.bhautik.mcagent.crafting.RecipeResolver() {
+                    @Override public Grid grid() { return Grid.INVENTORY_2X2; }
+                    @Override public Optional<CraftableRecipe> findRecipe(String id) {
+                        return Optional.ofNullable(recipes.get(id));
+                    }
+                };
+        CraftAction.Crafter crafter = (recipe, times) -> times;
+        PlaceBlockAction.Placer placer = itemId -> PlaceBlockAction.Placer.Result.ok();
+        var environment = env(crafter, placer,
+                com.bhautik.mcagent.world.BlockLocator.NONE);
+
+        // leather itself: one hunt step, no mining.
+        List<AgentAction> leatherPlan = planner.planAcquisition(resolver,
+                torchStocked(), Set.of(), id -> 0, environment,
+                "minecraft:leather", 3);
+        assertEquals(leatherPlan.size(), 1, "leather plan length");
+        if (!(leatherPlan.get(0) instanceof com.bhautik.mcagent.action.HuntAction hunt)) {
+            throw new IllegalStateException("expected a hunt step, got "
+                    + leatherPlan.get(0).title());
+        }
+        assertContains(hunt.title(), "cow");
+        // A hunt that has not yet exhausted its roam stays retryable; an
+        // empty scan must no longer fail the action on the spot.
+        if (!hunt.retryable()) {
+            throw new IllegalStateException("fresh hunt should be retryable");
+        }
+        hunt.start();
+        assertEquals(hunt.status(), com.bhautik.mcagent.action.ActionStatus.RUNNING,
+                "hunt survives an empty scan and roams");
+
+        // book: the full mixed chain - mine sugar cane, craft paper,
+        // hunt leather, craft the book.
+        List<AgentAction> bookPlan = planner.planAcquisition(resolver,
+                torchStocked(), Set.of(), id -> 0, environment,
+                "minecraft:book", 1);
+        boolean hunts = bookPlan.stream()
+                .anyMatch(step -> step instanceof com.bhautik.mcagent.action.HuntAction);
+        if (!hunts) {
+            throw new IllegalStateException("book chain never hunts leather: "
+                    + bookPlan.stream().map(AgentAction::title).toList());
+        }
+        boolean crafts = bookPlan.stream().anyMatch(step -> step instanceof CraftAction);
+        if (!crafts) {
+            throw new IllegalStateException("book chain never crafts");
+        }
+
+        // The planner reports what it demanded, so callers can withdraw
+        // only the stored supplies a plan actually uses (a leather goal
+        // must not haul the whole base chest along).
+        Set<String> demanded = new java.util.LinkedHashSet<>();
+        planner.planAcquisition(resolver, torchStocked(), Set.of(), id -> 0,
+                environment, List.of(Map.entry("minecraft:leather", 3)), demanded);
+        if (!demanded.contains("minecraft:leather")) {
+            throw new IllegalStateException("demanded set missing the goal item: " + demanded);
+        }
+        if (demanded.contains("minecraft:cobblestone")) {
+            throw new IllegalStateException(
+                    "leather plan must not demand cobblestone: " + demanded);
+        }
+
+        // Regression: when the only animals left are breeding stock, the
+        // action must keep ONE roam running. Resetting search state for
+        // spared prey restarted the roam every tick, which re-issued
+        // navigation constantly and stopped the timeout ever advancing.
+        FakeBackend roamBackend = new FakeBackend();
+        com.bhautik.mcagent.action.Hunter sparedOnly =
+                new com.bhautik.mcagent.action.Hunter() {
+                    @Override public Optional<MobSite> nearest(String mob, int radius) {
+                        return Optional.of(new MobSite(1, 2, 3));
+                    }
+                    @Override public boolean strike(String mob, double reach) {
+                        return false;
+                    }
+                    @Override public int countNearby(String mob, int radius) {
+                        return com.bhautik.mcagent.action.HuntAction.BREEDING_STOCK;
+                    }
+                };
+        var spareRun = new com.bhautik.mcagent.action.HuntAction(
+                "minecraft:cow", "minecraft:leather", 3, () -> 0, sparedOnly,
+                roamBackend,
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    @Override public int x() { return 0; }
+                    @Override public int z() { return 0; }
+                });
+        spareRun.start();
+        for (int tick = 0; tick < 40; tick++) {
+            spareRun.tick();
+        }
+        assertIntEquals(roamBackend.exploreCalls, 1,
+                "roam must issue navigation once, not every tick");
+        assertEquals(spareRun.status(), com.bhautik.mcagent.action.ActionStatus.RUNNING,
+                "spared-herd roam keeps running");
+
+        // Regression: after a kill the agent must detour to the drop
+        // instead of chasing the next animal, or it leaves the leather
+        // it just earned lying on the ground.
+        FakeBackend killBackend = new FakeBackend();
+        int[] liveHerd = {5};
+        com.bhautik.mcagent.action.Hunter shrinkingHerd =
+                new com.bhautik.mcagent.action.Hunter() {
+                    @Override public Optional<MobSite> nearest(String mob, int radius) {
+                        return Optional.of(new MobSite(10, 64, 10));
+                    }
+                    @Override public boolean strike(String mob, double reach) {
+                        return true; // always in reach and swinging
+                    }
+                    @Override public int countNearby(String mob, int radius) {
+                        return liveHerd[0];
+                    }
+                };
+        var killRun = new com.bhautik.mcagent.action.HuntAction(
+                "minecraft:cow", "minecraft:leather", 3, () -> 0, shrinkingHerd,
+                killBackend,
+                new com.bhautik.mcagent.world.PositionAnchor() {
+                    @Override public int x() { return 0; }
+                    @Override public int z() { return 0; }
+                });
+        killRun.start();
+        killRun.tick();          // strike; records the kill site
+        liveHerd[0] = 4;         // the cow died
+        int gotoBefore = killBackend.gotoCalls;
+        killRun.tick();          // must now path to the drop, not re-strike
+        if (killBackend.gotoCalls <= gotoBefore) {
+            throw new IllegalStateException(
+                    "kill did not trigger a detour to collect the drop");
+        }
+
+        // Regression: every mining plan gets torch upkeep, including the
+        // enchant path. It shipped without any, so enchant chains dug for
+        // lapis and obsidian with no torches.
+        Map<String, CraftableRecipe> upkeepRecipes = new HashMap<>(recipes);
+        upkeepRecipes.put("minecraft:torch", recipe("minecraft:torch", 4,
+                cell("minecraft:coal"), cell("minecraft:stick")));
+        upkeepRecipes.put("minecraft:stick", recipe("minecraft:stick", 4,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
+        upkeepRecipes.put("minecraft:oak_planks", recipe("minecraft:oak_planks", 4,
+                cell("minecraft:oak_log")));
+        upkeepRecipes.put("minecraft:enchanting_table",
+                tableRecipe("minecraft:enchanting_table", 1,
+                        cell("minecraft:book"), cell("minecraft:diamond"),
+                        cell("minecraft:obsidian")));
+        com.bhautik.mcagent.crafting.RecipeResolver upkeepResolver =
+                new com.bhautik.mcagent.crafting.RecipeResolver() {
+                    @Override public Grid grid() { return Grid.INVENTORY_2X2; }
+                    @Override public Optional<CraftableRecipe> findRecipe(String id) {
+                        return Optional.ofNullable(upkeepRecipes.get(id));
+                    }
+                };
+        // The agent already carries the item to enchant, a table to place
+        // and a pickaxe; only lapis has to be mined, which is what makes
+        // this a mining plan and so demands upkeep.
+        java.util.function.Function<String, Integer> carried = id -> switch (id) {
+            case "minecraft:diamond_sword", "minecraft:diamond_pickaxe",
+                 "minecraft:enchanting_table" -> 1;
+            default -> 0;
+        };
+        List<AgentAction> enchantPlan = planner.planEnchant(
+                upkeepResolver, carried, Set.of("minecraft:diamond_pickaxe"),
+                id -> 0, environment,
+                (item, level) -> com.bhautik.mcagent.action.EnchantAction.Enchanter
+                        .Result.ok(),
+                () -> 0, "minecraft:diamond_sword", 1, null);
+        boolean topsUpTorches = enchantPlan.stream()
+                .anyMatch(step -> step.title().contains("torch"));
+        if (!topsUpTorches) {
+            throw new IllegalStateException("enchant plan skipped torch upkeep: "
+                    + enchantPlan.stream().map(AgentAction::title).toList());
+        }
+
+        // Obsidian is made from lava when a source is in range, and only
+        // searched for when none is. Natural obsidian is scarce, so
+        // mining for it is mostly walking.
+        com.bhautik.mcagent.action.FluidHandler lavaNearby =
+                new com.bhautik.mcagent.action.FluidHandler() {
+                    @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
+                            nearest(String fluidId, int radius) {
+                        return com.bhautik.mcagent.action.MakeObsidianAction.LAVA.equals(fluidId)
+                                ? Optional.of(new com.bhautik.mcagent.world.BlockLocator
+                                        .BlockSite(5, 60, 5))
+                                : Optional.empty();
+                    }
+                    @Override public boolean fillFrom(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite site) {
+                        return true;
+                    }
+                    @Override public boolean pourOnto(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite site) {
+                        return true;
+                    }
+                    @Override public boolean carriesWater() {
+                        return false;
+                    }
+                };
+        var lavaEnv = envWithFluids(crafter, placer,
+                com.bhautik.mcagent.world.BlockLocator.NONE, lavaNearby);
+        List<AgentAction> madePlan = planner.planAcquisition(resolver,
+                id -> id.equals("minecraft:bucket") ? 1 : 0,
+                Set.of("minecraft:diamond_pickaxe"), id -> 0, lavaEnv,
+                "minecraft:obsidian", 4);
+        var makeStep = madePlan.stream()
+                .filter(step -> step instanceof com.bhautik.mcagent.action.MakeObsidianAction)
+                .findFirst().orElse(null);
+        if (makeStep == null) {
+            throw new IllegalStateException("obsidian plan never makes it from lava: "
+                    + madePlan.stream().map(AgentAction::title).toList());
+        }
+        // The plan keeps a mine step behind it, so a failed pour must fall
+        // through to mining rather than sinking the goal.
+        if (!makeStep.bestEffort()) {
+            throw new IllegalStateException("make-obsidian must be best-effort so the"
+                    + " mining fallback still runs");
+        }
+        boolean keepsMiningFallback = madePlan.stream()
+                .anyMatch(step -> step.title().contains("Mine") && step.title().contains("obsidian"));
+        if (!keepsMiningFallback) {
+            throw new IllegalStateException("no mining fallback behind make-obsidian: "
+                    + madePlan.stream().map(AgentAction::title).toList());
+        }
+        // Without lava it falls back to mining whatever generated naturally.
+        List<AgentAction> minedPlan = planner.planAcquisition(resolver,
+                id -> 0, Set.of("minecraft:diamond_pickaxe"), id -> 0, environment,
+                "minecraft:obsidian", 4);
+        boolean fallsBack = minedPlan.stream()
+                .noneMatch(step -> step instanceof com.bhautik.mcagent.action.MakeObsidianAction);
+        if (!fallsBack) {
+            throw new IllegalStateException("obsidian should be mined when no lava is near");
+        }
+
+        // Vein mining: reaching the target with ore still exposed nearby
+        // keeps digging (the walk there is the expensive part), but stops
+        // once the vein is gone and never exceeds the bonus cap.
+        FakeBackend veinBackend = new FakeBackend();
+        int[] mined = {0};
+        int[] exposed = {5};
+        var veinRun = new com.bhautik.mcagent.action.MineAction(
+                "minecraft:diamond_ore", 0, 2, () -> mined[0], veinBackend,
+                null, null, null, () -> exposed[0]);
+        veinRun.start();
+        mined[0] = 2;            // goal met, but 5 ore still exposed
+        veinRun.tick();
+        assertEquals(veinRun.status(), com.bhautik.mcagent.action.ActionStatus.RUNNING,
+                "vein still exposed keeps mining");
+        mined[0] = 7;            // took the vein
+        exposed[0] = 0;          // nothing left
+        veinRun.tick();
+        assertEquals(veinRun.status(), com.bhautik.mcagent.action.ActionStatus.SUCCESS,
+                "exhausted vein finishes the action");
+
+        // With no ore nearby it stops exactly at the requested count.
+        int[] lone = {0};
+        var loneRun = new com.bhautik.mcagent.action.MineAction(
+                "minecraft:diamond_ore", 0, 2, () -> lone[0], new FakeBackend(),
+                null, null, null, () -> 0);
+        loneRun.start();
+        lone[0] = 2;
+        loneRun.tick();
+        assertEquals(loneRun.status(), com.bhautik.mcagent.action.ActionStatus.SUCCESS,
+                "no vein nearby stops at the target");
+
+        // Items with no block AND no mob source still fail honestly.
+        try {
+            planner.planAcquisition(resolver, torchStocked(), Set.of(), id -> 0,
+                    environment, "minecraft:nether_star", 1);
+            throw new IllegalStateException("expected planning to refuse nether_star");
+        } catch (com.bhautik.mcagent.planner.Planner.PlanningException expected) {
+            assertContains(expected.getMessage(), "no supported acquisition strategy");
+        }
+    }
+
+    private static void validateXpSensing() {
+        com.bhautik.mcagent.world.XpSensor none =
+                com.bhautik.mcagent.world.XpSensor.NONE;
+        assertIntEquals(none.level(), 0, "NONE level");
+        assertIntEquals(none.totalPoints(), 0, "NONE points");
+
+        com.bhautik.mcagent.world.XpSensor at30 =
+                com.bhautik.mcagent.world.XpSensor.atLevel(30);
+        assertIntEquals(at30.level(), 30, "atLevel(30) level");
+
+        // Vanilla piecewise curve boundaries.
+        assertIntEquals(com.bhautik.mcagent.world.XpSensor.pointsForLevel(0), 0, "level 0");
+        assertIntEquals(com.bhautik.mcagent.world.XpSensor.pointsForLevel(1), 7, "level 1");
+        assertIntEquals(com.bhautik.mcagent.world.XpSensor.pointsForLevel(16), 352, "level 16");
+        assertIntEquals(com.bhautik.mcagent.world.XpSensor.pointsForLevel(17), 394, "level 17");
+        assertIntEquals(com.bhautik.mcagent.world.XpSensor.pointsForLevel(30), 1395, "level 30");
+        assertIntEquals(com.bhautik.mcagent.world.XpSensor.pointsForLevel(32), 1628, "level 32");
+        assertIntEquals(com.bhautik.mcagent.world.XpSensor.MAX_ENCHANT_COST, 30, "max enchant cost");
+    }
+
+    private static void assertIntEquals(int actual, int expected, String label) {
+        if (actual != expected) {
+            throw new IllegalStateException(label + ": expected [" + expected + "] got [" + actual + "]");
+        }
+    }
+
     private static void assertEquals(Object actual, Object expected, String label) {
         if (actual != expected) {
             throw new IllegalStateException(label + ": expected [" + expected + "] got [" + actual + "]");
@@ -948,8 +1288,11 @@ public final class AgentCli {
             return true;
         }
 
+        int gotoCalls;
+
         @Override
         public boolean startGoTo(int x, int y, int z) {
+            gotoCalls++;
             return true;
         }
 

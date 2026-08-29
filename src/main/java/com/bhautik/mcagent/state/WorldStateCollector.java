@@ -14,7 +14,8 @@ public final class WorldStateCollector {
                 player.getX(),
                 player.getY(),
                 player.getZ(),
-                player.level().dimension().identifier().toString()
+                player.level().dimension().identifier().toString(),
+                player.experienceLevel
         );
     }
 }

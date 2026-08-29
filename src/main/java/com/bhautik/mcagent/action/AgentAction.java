@@ -37,4 +37,16 @@ public interface AgentAction {
     default boolean bestEffort() {
         return false;
     }
+
+    /**
+     * Whether re-planning could plausibly change this failure. Most
+     * failures are worth another attempt (a vein ran out, navigation
+     * stalled). Some are settled facts about the world — no prey exists
+     * for miles — and re-running the identical plan just burns attempts
+     * and repeats side effects. Those return false so the goal fails
+     * immediately with the real reason.
+     */
+    default boolean retryable() {
+        return true;
+    }
 }

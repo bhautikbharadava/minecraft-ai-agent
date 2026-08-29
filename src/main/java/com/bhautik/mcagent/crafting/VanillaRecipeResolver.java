@@ -126,10 +126,21 @@ public final class VanillaRecipeResolver implements RecipeResolver {
         }
         if (recipe instanceof ShapelessRecipe shapeless) {
             List<Ingredient> ingredients = shapeless.placementInfo().ingredients();
-            if (ingredients.isEmpty() || ingredients.size() > maxSide) {
+            // Shapeless recipes care about slot COUNT, not arrangement: the
+            // limit is the whole grid (maxSide^2), not one row. Treating it
+            // as a single row hid every 4+ ingredient recipe - including
+            // book (3 paper + 1 leather), which broke the enchanting chain.
+            if (ingredients.isEmpty() || ingredients.size() > maxSide * maxSide) {
                 return null;
             }
-            return new GridDefinition(ingredients.size(), 1, ingredients);
+            // Smallest grid that holds them, so requiresTable stays honest:
+            // four ingredients fit the 2x2 inventory grid, more need a table.
+            int side = ingredients.size() <= 4 ? 2 : maxSide;
+            List<Ingredient> cells = new ArrayList<>(ingredients);
+            while (cells.size() < side * side) {
+                cells.add(null); // padding becomes an explicit empty slot
+            }
+            return new GridDefinition(side, side, cells);
         }
         return null; // custom matcher recipes are not planned this milestone
     }

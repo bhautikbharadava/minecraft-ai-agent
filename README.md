@@ -27,8 +27,18 @@ Summary of what works today:
   chest contents and finished furnace smelts as owned supplies - the
   plan withdraws them instead of re-mining
 
-Not yet: combat, enchanting, nether/smithing, cave targeting, farms
-(M10/M11), natural language (M12). See PROGRESS.md for the full backlog.
+- **Enchanting**: `/agent enchant <item>` plans and executes — secures
+  the item, mines lapis, walks to or crafts+places an enchanting table,
+  drives the real vanilla enchanting menu, then collects the table.
+  Leather for the table's book is hunted from cows; passing a level
+  farms the XP shortfall by mining (slow — low levels only). Full design
+  in **[docs/ENCHANTING.md](docs/ENCHANTING.md)**
+- **Hunting**: items no block drops (leather, raw meat) route to a hunt
+  — approach the nearest animal, strike, collect drops
+
+Not yet: mob grinders (the realistic route to high XP), bookshelf rings,
+nether/smithing, cave targeting, farms (M10/M11), natural language
+(M12). See PROGRESS.md for the full backlog.
 
 ### Execution backend
 
@@ -50,6 +60,8 @@ swapped for any navigation backend.
                                     stronghold, mineshaft, shipwreck, ...)
 /agent base here                    set home anchor; place chest + crafting table
 /agent stash <item|junk> [count]    store items at the base chest
+/agent enchant <item> [level]       enchant goal: secures item + lapis +
+                                    permanent enchanting table at base, enchants there
 /agent goal                         live goal progress
 /agent cancel                       stop goal + navigation
 ```
