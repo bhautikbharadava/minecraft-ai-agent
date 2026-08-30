@@ -1443,6 +1443,10 @@ public final class GoalService {
                         .map(key -> key.identifier().toString()).orElse(""),
                 new com.bhautik.mcagent.world.PositionAnchor() {
                     @Override public int x() { return player.blockPosition().getX(); }
+                    // Tracked: obsidian-making needs depth to know whether
+                    // it is still on the surface, and the default is
+                    // Integer.MIN_VALUE, which reads as "already deep".
+                    @Override public int y() { return player.blockPosition().getY(); }
                     @Override public int z() { return player.blockPosition().getZ(); }
                 },
                 com.bhautik.mcagent.integration.VanillaEquipment.equipper(player),

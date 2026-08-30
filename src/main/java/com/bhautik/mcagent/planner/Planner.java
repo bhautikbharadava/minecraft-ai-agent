@@ -446,7 +446,8 @@ public final class Planner {
                     expand(BUCKET_ITEM, 1, false); // no bucket, no obsidian
                     plan.add(new MakeObsidianAction(missing,
                             environment.obsidianBlockCount(), environment.fluids(),
-                            baritoneIntegration, environment.distanceSensor()));
+                            baritoneIntegration, environment.distanceSensor(),
+                            environment.anchor()));
                     com.bhautik.mcagent.McAgent.LOGGER.info(
                             "[Planner] Obsidian will be made from lava (x{})", missing);
                 }

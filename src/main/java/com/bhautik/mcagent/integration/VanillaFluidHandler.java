@@ -107,27 +107,43 @@ public final class VanillaFluidHandler {
         if (wanted == null) {
             return Optional.empty();
         }
+        // Expanding shells with an early exit. Scanning the whole cube was
+        // 65^3 lookups EVERY tick at radius 32; searching outward returns
+        // the nearest source by construction and stops as soon as it finds
+        // one, which is what makes a wider search affordable at all.
         BlockPos best = null;
-        double nearest = Double.MAX_VALUE;
-        for (int dx = -radius; dx <= radius; dx += SCAN_STEP) {
-            for (int dy = -radius; dy <= radius; dy += SCAN_STEP) {
-                for (int dz = -radius; dz <= radius; dz += SCAN_STEP) {
-                    var pos = origin.offset(dx, dy, dz);
-                    var fluid = level.getFluidState(pos);
-                    if (!fluid.isSource() || !fluid.getType().isSame(wanted)) {
-                        continue;
-                    }
-                    double distance = pos.distSqr(origin);
-                    if (distance < nearest) {
-                        nearest = distance;
-                        best = pos.immutable();
-                    }
-                }
-            }
+        for (int shell = 0; shell <= radius && best == null; shell += SCAN_STEP) {
+            best = scanShell(level, origin, wanted, shell);
         }
         return best == null ? Optional.empty()
                 : Optional.of(new BlockLocator.BlockSite(best.getX(), best.getY(),
                         best.getZ()));
+    }
+
+    /**
+     * Only the surface of the cube at this radius, so an outward search
+     * never re-checks ground a smaller shell already covered.
+     */
+    private static BlockPos scanShell(net.minecraft.world.level.Level level,
+                                      BlockPos origin,
+                                      net.minecraft.world.level.material.Fluid wanted,
+                                      int shell) {
+        for (int dx = -shell; dx <= shell; dx++) {
+            for (int dy = -shell; dy <= shell; dy++) {
+                for (int dz = -shell; dz <= shell; dz++) {
+                    if (Math.max(Math.max(Math.abs(dx), Math.abs(dy)), Math.abs(dz))
+                            != shell) {
+                        continue; // interior; an earlier shell had it
+                    }
+                    var pos = origin.offset(dx, dy, dz);
+                    var fluid = level.getFluidState(pos);
+                    if (fluid.isSource() && fluid.getType().isSame(wanted)) {
+                        return pos.immutable();
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private static int findItem(ServerPlayer player, net.minecraft.world.item.Item item) {
