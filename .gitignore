@@ -1,5 +1,7 @@
 .gradle/
-build/
+# Anchored to the repo root: a bare "build/" also matches the
+# com.bhautik.mcagent.build source package and silently drops it.
+/build/
 run/
 *.iml
 .idea/
