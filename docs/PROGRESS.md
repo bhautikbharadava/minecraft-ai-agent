@@ -83,6 +83,13 @@ master.
 - Breeding: when the breeding food is carried (wheat for cows/sheep,
   carrots for pigs, seeds for chickens), the plan grows the herd before
   harvesting it
+- Farming: crops are grown, not mined - gather seeds from grass, craft a
+  hoe, walk home, till soil beside water, sow, ripen (bone meal when
+  carried), reap. The plot is base infrastructure like the chest and
+  enchanting table: recorded in BaseSavedState and returned to, not a
+  field left wherever the agent happened to stand. This closes the
+  leather cycle with no village needed:
+  seeds -> wheat -> breed cows -> leather
 - Auto-stash: free slots < 3 mid-goal -> detour to base chest, dump junk
   list, resume
 - Death: goal fails honestly with death location (loot drops vanilla-style)
@@ -100,11 +107,11 @@ master.
   up with a progress report rather than digging forever - a mob grinder
   is the realistic route and is not built. Bookshelf rings are not placed,
   so offers stay in the low range
-- Hunting roams to find prey and always spares a breeding pair, and it
-  breeds beforehand when the right food is already carried. It is not a
-  closed loop yet: **wheat cannot be grown**, only found (wild wheat is
-  village-farm only), so renewable leather still depends on a wheat
-  supply. Growing crops is the farming milestone (M11)
+- Crops grow on the world clock: without bone meal a wheat harvest takes
+  minutes of real time, and the agent waits through it rather than doing
+  other work. Bone meal (when carried) skips the wait
+- Farming needs soil within 4 blocks of water; away from water the plan
+  fails honestly rather than tilling ground that will dry out
 - No pen or enclosure is built; bred animals wander freely
 - Netherite unreachable (smithing + nether not implemented)
 - Auto-restock before goals is command-driven only (`/agent restock`);

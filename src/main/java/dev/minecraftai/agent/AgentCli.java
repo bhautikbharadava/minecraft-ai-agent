@@ -627,7 +627,7 @@ public final class AgentCli {
                 base.furnaceLocator(), base.enchantTableLocator(),
                 base.distanceSensor(), base.biomeSensor(), base.anchor(),
                 base.equipper(), base.hunter(), base.xpSensor(), base.breeder(),
-                fluids, base.obsidianBlockCount(), base.nearbyBlockCount());
+                fluids, base.obsidianBlockCount(), base.nearbyBlockCount(), base.farmer(), base.farmSite(), base.structureBuilder());
     }
 
     /** Environment variant with a controllable biome and anchor. */
@@ -660,7 +660,10 @@ public final class AgentCli {
                 com.bhautik.mcagent.action.Breeder.NONE,
                 com.bhautik.mcagent.action.FluidHandler.NONE,
                 () -> 0,
-                blockId -> 0);
+                blockId -> 0,
+                com.bhautik.mcagent.action.Farmer.NONE,
+                null,
+                com.bhautik.mcagent.action.StructureBuilder.NONE);
     }
 
     /** A smelter that always reports success. */
@@ -1224,6 +1227,113 @@ public final class AgentCli {
         loneRun.tick();
         assertEquals(loneRun.status(), com.bhautik.mcagent.action.ActionStatus.SUCCESS,
                 "no vein nearby stops at the target");
+
+        // The leather cycle closes without a village: wheat is GROWN
+        // (seeds from grass, tilled, sown, reaped) rather than mined,
+        // because wild wheat only generates in village farms.
+        Map<String, CraftableRecipe> farmRecipes = new HashMap<>(recipes);
+        farmRecipes.put("minecraft:wooden_hoe", tableRecipe("minecraft:wooden_hoe", 1,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"), SlotSpec.EMPTY,
+                SlotSpec.EMPTY, cell("minecraft:stick"), SlotSpec.EMPTY,
+                SlotSpec.EMPTY, cell("minecraft:stick"), SlotSpec.EMPTY));
+        farmRecipes.put("minecraft:oak_planks", recipe("minecraft:oak_planks", 4,
+                cell("minecraft:oak_log")));
+        farmRecipes.put("minecraft:stick", recipe("minecraft:stick", 4,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
+        // The hoe is a 3x3 recipe, so the plan needs a table to make it on.
+        farmRecipes.put("minecraft:crafting_table", recipe("minecraft:crafting_table", 1,
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks"),
+                cell("minecraft:oak_planks"), cell("minecraft:oak_planks")));
+        com.bhautik.mcagent.crafting.RecipeResolver farmResolver =
+                new com.bhautik.mcagent.crafting.RecipeResolver() {
+                    @Override public Grid grid() { return Grid.INVENTORY_2X2; }
+                    @Override public Optional<CraftableRecipe> findRecipe(String id) {
+                        return Optional.ofNullable(farmRecipes.get(id));
+                    }
+                };
+        List<AgentAction> wheatPlan = planner.planAcquisition(farmResolver,
+                torchStocked(), Set.of(), id -> 0, environment, "minecraft:wheat", 2);
+        boolean farms = wheatPlan.stream()
+                .anyMatch(step -> step instanceof com.bhautik.mcagent.action.FarmCropAction);
+        if (!farms) {
+            throw new IllegalStateException("wheat must be farmed, not mined: "
+                    + wheatPlan.stream().map(AgentAction::title).toList());
+        }
+        // Seeds come from grass, so the chain starts from nothing.
+        boolean getsSeeds = wheatPlan.stream()
+                .anyMatch(step -> step.title().contains("short_grass"));
+        if (!getsSeeds) {
+            throw new IllegalStateException("wheat plan never gathers seeds: "
+                    + wheatPlan.stream().map(AgentAction::title).toList());
+        }
+
+        // Regression: a build must refuse outright when anything valuable
+        // is inside its footprint, BEFORE placing a single block. This
+        // destroyed a base chest and everything in it.
+        var farmPlan = com.bhautik.mcagent.build.Blueprints.wheatFarm();
+        boolean[] everPlaced = {false};
+        com.bhautik.mcagent.action.StructureBuilder guarded =
+                new com.bhautik.mcagent.action.StructureBuilder() {
+                    @Override public boolean place(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite at,
+                            String blockId) {
+                        everPlaced[0] = true;
+                        return true;
+                    }
+                    @Override public boolean clear(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite at) {
+                        everPlaced[0] = true;
+                        return true;
+                    }
+                    @Override public String blockAt(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite at) {
+                        return "minecraft:chest";
+                    }
+                    @Override public boolean isProtected(
+                            com.bhautik.mcagent.world.BlockLocator.BlockSite at) {
+                        return at.x() == 2 && at.z() == 2; // one chest in the way
+                    }
+                };
+        var guardedBuild = new com.bhautik.mcagent.action.BuildAction(farmPlan,
+                new com.bhautik.mcagent.world.BlockLocator.BlockSite(0, 64, 0),
+                guarded, new FakeBackend(), (x, y, z) -> 0.0);
+        guardedBuild.start();
+        assertEquals(guardedBuild.status(),
+                com.bhautik.mcagent.action.ActionStatus.FAILED,
+                "build must refuse a footprint containing a chest");
+        if (everPlaced[0]) {
+            throw new IllegalStateException(
+                    "build touched the world before refusing - the survey must "
+                            + "run first, or contents are already gone");
+        }
+        assertContains(guardedBuild.failureReason(), "refusing to build");
+        if (guardedBuild.retryable()) {
+            throw new IllegalStateException("a blocked site must not be retried");
+        }
+
+        // Reservations keep a second structure off the first one's ground.
+        var firstFarm = com.bhautik.mcagent.build.Reservation.centredOn(
+                "wheat_farm", farmPlan, 0, 64, 0);
+        var onTop = com.bhautik.mcagent.build.Reservation.centredOn(
+                "wheat_farm", farmPlan, 0, 64, 0);
+        if (!firstFarm.overlaps(onTop)) {
+            throw new IllegalStateException("identical footprints must overlap");
+        }
+        var touching = com.bhautik.mcagent.build.Reservation.centredOn(
+                "wheat_farm", farmPlan, 9, 64, 0);
+        if (!firstFarm.overlaps(touching)) {
+            throw new IllegalStateException(
+                    "adjacent footprints must overlap once the margin is counted");
+        }
+        var wellClear = com.bhautik.mcagent.build.Reservation.centredOn(
+                "wheat_farm", farmPlan, 40, 64, 40);
+        if (firstFarm.overlaps(wellClear)) {
+            throw new IllegalStateException("distant footprints must not overlap");
+        }
+        // A farm's own ground counts as covered, so nothing is sited inside it.
+        if (!firstFarm.covers(0, 64, 0)) {
+            throw new IllegalStateException("a reservation must cover its own centre");
+        }
 
         // Items with no block AND no mob source still fail honestly.
         try {

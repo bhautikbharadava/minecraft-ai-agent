@@ -6,7 +6,11 @@ import com.bhautik.mcagent.action.CraftAction;
 import com.bhautik.mcagent.action.EnchantAction;
 import com.bhautik.mcagent.action.Equipper;
 import com.bhautik.mcagent.action.BreedAction;
+import com.bhautik.mcagent.action.BuildAction;
+import com.bhautik.mcagent.action.StructureBuilder;
 import com.bhautik.mcagent.action.Breeder;
+import com.bhautik.mcagent.action.FarmCropAction;
+import com.bhautik.mcagent.action.Farmer;
 import com.bhautik.mcagent.action.FluidHandler;
 import com.bhautik.mcagent.action.HuntAction;
 import com.bhautik.mcagent.action.Hunter;
@@ -20,6 +24,7 @@ import com.bhautik.mcagent.crafting.RecipeResolver;
 import com.bhautik.mcagent.crafting.SmeltingResolver;
 import com.bhautik.mcagent.integration.BaritoneIntegration;
 import com.bhautik.mcagent.item.DirectAcquisitions;
+import com.bhautik.mcagent.item.Crops;
 import com.bhautik.mcagent.item.MobDrops;
 import com.bhautik.mcagent.world.BiomeSensor;
 import com.bhautik.mcagent.world.BlockLocator;
@@ -74,6 +79,12 @@ public final class Planner {
     public static final String OBSIDIAN_ITEM = "minecraft:obsidian";
     /** Bucket needed before any obsidian can be made. */
     public static final String BUCKET_ITEM = "minecraft:bucket";
+    /** Blueprint blocks that are made in place rather than carried. */
+    public static final String FARMLAND_BLOCK = "minecraft:farmland";
+    public static final String WATER_BLOCK = "minecraft:water";
+    public static final String WATER_BUCKET_ITEM = "minecraft:water_bucket";
+    /** Tilling soil needs one; the cheapest tier is enough. */
+    public static final String HOE_ITEM = "minecraft:wooden_hoe";
     /** Currency the enchanting table consumes per enchant (vanilla: 1-3). */
     public static final String LAPIS_ITEM = "minecraft:lapis_lazuli";
     /** Lapis secured before an enchant so every offer is payable. */
@@ -126,7 +137,11 @@ public final class Planner {
                               FluidHandler fluids,
                               IntSupplier obsidianBlockCount,
                               /** Same-ore blocks exposed near the agent, by block id. */
-                              Function<String, Integer> nearbyBlockCount) {
+                              Function<String, Integer> nearbyBlockCount,
+                              Farmer farmer,
+                              /** Where the base farm lives; null when no base is set. */
+                              BlockLocator.BlockSite farmSite,
+                              StructureBuilder structureBuilder) {
     }
 
     private final BaritoneIntegration baritoneIntegration;
@@ -217,6 +232,62 @@ public final class Planner {
      * the dependencies grants XP incidentally, and the enchant step
      * fails honestly when the level is still short.
      */
+    /**
+     * Build plan: take off the blueprint's material list, gather whatever
+     * is missing through the normal dependency machinery, walk to the
+     * site, then raise and verify the structure.
+     *
+     * <p>Gathering first is what makes this more than a placement loop -
+     * the agent works out that a farm needs a bucket and a hoe, and that
+     * those need iron and wood, the same way it does for anything else.
+     */
+    public List<AgentAction> planBuild(RecipeResolver resolver,
+                                       Function<String, Integer> plannedCounts,
+                                       Set<String> ownedItemIds,
+                                       ToIntFunction<String> liveCounts,
+                                       Environment environment,
+                                       com.bhautik.mcagent.build.Blueprint blueprint,
+                                       BlockLocator.BlockSite site,
+                                       Set<String> demandedOut) {
+        Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
+                liveCounts, environment);
+        expansion.demanded = demandedOut;
+        for (var material : blueprint.materials().entrySet()) {
+            String itemId = material.getKey();
+            int count = material.getValue();
+            // Farmland is tilled, water is poured, so neither is carried:
+            // secure the tool instead of the block.
+            if (FARMLAND_BLOCK.equals(itemId)) {
+                expansion.expand(HOE_ITEM, 1, false);
+                continue;
+            }
+            if (WATER_BLOCK.equals(itemId)) {
+                expansion.expand(WATER_BUCKET_ITEM, 1, false);
+                continue;
+            }
+            expansion.expand(itemId, count, false);
+        }
+        List<AgentAction> plan = new ArrayList<>(expansion.plan);
+        prependUpkeep(plan, resolver, plannedCounts, ownedItemIds, liveCounts,
+                environment, false);
+        if (site != null) {
+            plan.add(moveTo(blueprint.name(), site, environment));
+        }
+        plan.add(new BuildAction(blueprint, site, environment.structureBuilder(),
+                baritoneIntegration, environment.distanceSensor()));
+        return plan;
+    }
+
+    /** A walk to a fixed spot, verified by live distance. */
+    private MoveAction moveTo(String label, BlockLocator.BlockSite site,
+                              Environment environment) {
+        return new MoveAction(label, site.x(), site.y(), site.z(),
+                BLOCK_ARRIVE_DISTANCE_SQ,
+                () -> environment.distanceSensor()
+                        .distanceSquaredTo(site.x(), site.y(), site.z()),
+                baritoneIntegration);
+    }
+
     public List<AgentAction> planEnchant(RecipeResolver resolver,
                                          Function<String, Integer> plannedCounts,
                                          Set<String> ownedItemIds,
@@ -407,6 +478,30 @@ public final class Planner {
                         // Finish the vein we walked to instead of leaving
                         // exposed ore behind for another trip.
                         () -> environment.nearbyBlockCount().apply(vein)));
+                produced.merge(itemId, missing, Integer::sum);
+                return;
+            }
+            // Crops: grow them. Wild wheat only exists in village farms, so
+            // without farming, renewable leather depends on finding a
+            // village (cows breed with wheat).
+            var crop = Crops.forItem(itemId).orElse(null);
+            if (crop != null) {
+                // One seed per crop wanted, not one seed total: asking for
+                // a single seed planted a single crop no matter how much
+                // was ordered.
+                expand(crop.seedItemId(), missing, false);
+                expand(HOE_ITEM, 1, false);            // tilling needs one
+                // The farm belongs at home, like the chest and the
+                // enchanting table: one known plot to come back to and
+                // harvest again, not a field wherever the agent stood.
+                if (environment.farmSite() != null) {
+                    walkTo("farm", environment.farmSite());
+                }
+                plan.add(new FarmCropAction(crop.cropBlockId(), crop.seedItemId(),
+                        missing, () -> liveCounts.applyAsInt(itemId),
+                        environment.farmer(), baritoneIntegration));
+                com.bhautik.mcagent.McAgent.LOGGER.info(
+                        "[Planner] Farming planned: {} x{}", itemId, missing);
                 produced.merge(itemId, missing, Integer::sum);
                 return;
             }

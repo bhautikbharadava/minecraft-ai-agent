@@ -13,6 +13,7 @@ import com.bhautik.mcagent.survival.Threat;
 import com.bhautik.mcagent.world.BlockLocator;
 import dev.minecraftai.agent.goal.AgentGoal;
 import dev.minecraftai.agent.goal.AgentGoalManager;
+import dev.minecraftai.agent.goal.BuildGoal;
 import dev.minecraftai.agent.goal.EnchantGoal;
 import dev.minecraftai.agent.goal.ExploreGoal;
 import dev.minecraftai.agent.goal.GetKitGoal;
@@ -180,6 +181,92 @@ public final class GoalService {
             return goal.progressReport()
                     + System.lineSeparator() + "Agent is working. Use /agent goal for progress.";
         }
+    }
+
+    /** Blueprint names the agent can build: built-ins plus files on disk. */
+    public Set<String> blueprintNames() {
+        var names = new java.util.TreeSet<>(
+                com.bhautik.mcagent.build.Blueprints.names());
+        names.addAll(com.bhautik.mcagent.integration.NbtBlueprintLoader.available());
+        return names;
+    }
+
+    /**
+     * Build goal: take off the blueprint's materials, gather what is
+     * missing, walk to the site and raise it. A structure file on disk
+     * wins over a built-in of the same name, so designs can be replaced
+     * without touching code.
+     */
+    public String build(ServerPlayer player, String rawName) {
+        synchronized (monitor) {
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
+            }
+            var blueprint = com.bhautik.mcagent.integration.NbtBlueprintLoader
+                    .load(rawName)
+                    .or(() -> com.bhautik.mcagent.build.Blueprints.byName(rawName))
+                    .orElse(null);
+            if (blueprint == null) {
+                return "Invalid blueprint: " + rawName + " (known: "
+                        + blueprintNames() + ")";
+            }
+            MinecraftServer server = player.level().getServer();
+            UUID playerId = player.getUUID();
+            var site = buildSiteFor(server, player, blueprint);
+            if (site == null) {
+                return "Invalid site: no clear "
+                        + blueprint.width() + "x" + blueprint.length()
+                        + " ground within "
+                        + com.bhautik.mcagent.integration.BuildSiteFinder.MAX_RANGE
+                        + " blocks of base that is free of other structures";
+            }
+
+            BuildGoal goal = new BuildGoal(blueprint.describe(),
+                    () -> false, // verified by the build action against the world
+                    () -> blueprint.blockCount());
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            McAgent.LOGGER.info("[Build] Materials: {}", blueprint.materials());
+            goalManager.register(goal);
+            ActiveRun activeRun = new ActiveRun(goal, null, playerId, 1,
+                    snapshot(player), server, VanillaSurvivalMonitor.monitor(player));
+            activeRun.blueprint = blueprint;
+            activeRun.buildSite = site;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
+            var started = executor.pollFinished();
+            if (started.isPresent()) {
+                ActiveRun failedRun = run;
+                run = null;
+                failedRun.goal.markFailed(started.get().failureReason());
+                return failedRun.goal.progressReport();
+            }
+            return goal.progressReport()
+                    + System.lineSeparator() + "Agent is working. Use /agent goal for progress.";
+        }
+    }
+
+    /**
+     * Surveys for a site near the base that actually fits the structure:
+     * flat enough, clear of base furniture, and not overlapping anything
+     * already built. Null when nothing suitable is in range, so the goal
+     * can say so rather than bulldozing a spot.
+     */
+    private BlockLocator.BlockSite buildSiteFor(MinecraftServer server,
+                                                ServerPlayer player,
+                                                com.bhautik.mcagent.build.Blueprint blueprint) {
+        if (server == null) {
+            return null;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        int[] anchor = state.anchor();
+        var origin = (anchor[0] == 0 && anchor[1] == 0 && anchor[2] == 0)
+                ? player.blockPosition()
+                : new net.minecraft.core.BlockPos(anchor[0], anchor[1], anchor[2]);
+        return com.bhautik.mcagent.integration.BuildSiteFinder
+                .find(player, blueprint, origin, state.reservations())
+                .orElse(null);
     }
 
     private static String shortName(String itemId) {
@@ -793,6 +880,11 @@ public final class GoalService {
             return;
         }
         refreshSnapshot(player);
+        // A build counts only when its own verification pass succeeded.
+        if (finished instanceof com.bhautik.mcagent.action.BuildAction
+                && finished.status() == ActionStatus.SUCCESS) {
+            activeRun.buildVerified = true;
+        }
         int current = activeRun.item == null ? 0
                 : activeRun.snapshot.count(activeRun.item);
         // Reality first (PRD 14): if the goal is already satisfied, no
@@ -802,6 +894,16 @@ public final class GoalService {
                 // The table the agent just used becomes permanent base
                 // infrastructure, so later enchants walk back to it.
                 rememberEnchantTable(player);
+            }
+            if (finished instanceof com.bhautik.mcagent.action.FarmCropAction) {
+                // Same for the crop plot: harvests return to one field.
+                rememberFarmPlot(player);
+            }
+            if (activeRun.blueprint != null && activeRun.buildSite != null
+                    && activeRun.buildVerified) {
+                // Claim the ground only for a structure that really went
+                // up; reserving failed sites fills the map with ghosts.
+                reserveBuildSite(activeRun);
             }
             activeRun.goal.markSuccess();
             McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
@@ -900,6 +1002,13 @@ public final class GoalService {
                     liveCountById(activeRun.server, activeRun.playerId, piece.id())
                             >= activeRun.requested);
         }
+        if (activeRun.blueprint != null) {
+            // Only a build that actually verified counts. An empty queue
+            // says the action STOPPED, not that it worked - a failed build
+            // empties the queue too, and reporting that as success also
+            // reserved ground for a structure that was never raised.
+            return activeRun.buildVerified;
+        }
         if (activeRun.enchantItemId != null) {
             // Carrying the item is not the goal - carrying an ENCHANTED one
             // is. The generic count check below is true from the start,
@@ -978,6 +1087,32 @@ public final class GoalService {
                 McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
             }
             McAgent.LOGGER.info("[Planner] Kit plan generated: {}",
+                    actions.stream().map(AgentAction::title).toList());
+            return actions;
+        }
+        if (activeRun.blueprint != null) {
+            var collected = InventoryState.collect(player).itemCounts();
+            var countsNow = new java.util.HashMap<>(collected);
+            // Materials sitting in the base chest count as owned, so the
+            // build withdraws them instead of mining fresh ones.
+            var baseSupplies = baseSuppliesFor(player);
+            for (var entry : baseSupplies.entrySet()) {
+                countsNow.merge(entry.getKey(), entry.getValue(), Integer::sum);
+            }
+            var environment = environmentFor(activeRun, player, countsNow);
+            var demanded = new java.util.LinkedHashSet<String>();
+            List<AgentAction> actions = executor.planner().planBuild(
+                    environment.resolver(),
+                    id -> countsNow.getOrDefault(id, 0),
+                    countsNow.keySet(),
+                    itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                    environment, activeRun.blueprint, activeRun.buildSite, demanded);
+            var usefulSupplies = relevantSupplies(baseSupplies, demanded);
+            if (!usefulSupplies.isEmpty()) {
+                actions.addAll(0, List.of(supplyWithdrawStep(player, usefulSupplies)));
+                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
+            }
+            McAgent.LOGGER.info("[Planner] Build plan generated: {}",
                     actions.stream().map(AgentAction::title).toList());
             return actions;
         }
@@ -1172,6 +1307,60 @@ public final class GoalService {
         return new BlockLocator.BlockSite(anchor[0], anchor[1], anchor[2]);
     }
 
+    /**
+     * Where crops get grown: the plot already tilled at base if there is
+     * one, otherwise the base anchor so a new farm is started at home
+     * rather than wherever the agent happened to be standing.
+     */
+    private BlockLocator.BlockSite farmSiteFor(MinecraftServer server) {
+        if (server == null) {
+            return null;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        int[] farm = state.farm();
+        if (farm != null) {
+            return new BlockLocator.BlockSite(farm[0], farm[1], farm[2]);
+        }
+        int[] anchor = state.anchor();
+        if (anchor[0] == 0 && anchor[1] == 0 && anchor[2] == 0) {
+            return null; // no base set yet
+        }
+        return new BlockLocator.BlockSite(anchor[0], anchor[1], anchor[2]);
+    }
+
+    /** Records the ground a finished structure occupies, with dimensions. */
+    private void reserveBuildSite(ActiveRun activeRun) {
+        if (activeRun.server == null) {
+            return;
+        }
+        var site = activeRun.buildSite;
+        var reservation = com.bhautik.mcagent.build.Reservation.centredOn(
+                activeRun.blueprint.name(), activeRun.blueprint,
+                site.x(), site.y(), site.z());
+        com.bhautik.mcagent.integration.BaseSavedState.get(activeRun.server)
+                .reserve(reservation);
+        McAgent.LOGGER.info("[Build] Reserved {}", reservation.describe());
+    }
+
+    /** Remembers the crop plot so later harvests return to the same field. */
+    private void rememberFarmPlot(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        var server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        if (state.hasFarm()) {
+            return;
+        }
+        var pos = player.blockPosition();
+        state.setFarm(pos.getX(), pos.getY(), pos.getZ());
+        McAgent.LOGGER.info("[Agent] Farm plot recorded at {} {} {}",
+                pos.getX(), pos.getY(), pos.getZ());
+    }
+
     /** Remembers a freshly built enchanting table as base infrastructure. */
     private void rememberEnchantTable(ServerPlayer player) {
         if (player == null) {
@@ -1267,7 +1456,10 @@ public final class GoalService {
                                 com.bhautik.mcagent.planner.Planner.OBSIDIAN_ITEM,
                                 com.bhautik.mcagent.action.MakeObsidianAction.SEARCH_RADIUS),
                 blockId -> com.bhautik.mcagent.integration.VanillaPlacementExecutor
-                        .blockCount(player, blockId, VEIN_SCAN_RADIUS));
+                        .blockCount(player, blockId, VEIN_SCAN_RADIUS),
+                com.bhautik.mcagent.integration.VanillaFarmer.farmer(player),
+                farmSiteFor(activeRun.server),
+                com.bhautik.mcagent.integration.VanillaStructureBuilder.builder(player));
     }
 
     /**
@@ -1415,6 +1607,12 @@ public final class GoalService {
         boolean stashing;
         /** Non-null while a hostile is being fought. */
         String combatTarget;
+        /** Non-null for build runs: the structure to raise. */
+        com.bhautik.mcagent.build.Blueprint blueprint;
+        /** Where a build run puts the structure. */
+        BlockLocator.BlockSite buildSite;
+        /** Set only when the build action verified the finished structure. */
+        boolean buildVerified;
         /** Non-null for enchant runs: the item id to enchant. */
         String enchantItemId;
         /** Lowest acceptable offer level for an enchant run. */

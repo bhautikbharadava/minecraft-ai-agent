@@ -22,6 +22,25 @@ public final class BaseSavedState extends SavedData {
     private int enchantX;
     private int enchantY;
     private int enchantZ;
+    private java.util.List<com.bhautik.mcagent.build.Reservation> reservations =
+            new java.util.ArrayList<>();
+    private boolean hasFarm;
+    private int farmX;
+    private int farmY;
+    private int farmZ;
+
+    /** Ground already committed to a structure, so builds do not collide. */
+    private static final Codec<com.bhautik.mcagent.build.Reservation> RESERVATION_CODEC =
+            RecordCodecBuilder.create(instance -> instance.group(
+                    Codec.STRING.fieldOf("name")
+                            .forGetter(com.bhautik.mcagent.build.Reservation::name),
+                    Codec.INT.fieldOf("x").forGetter(com.bhautik.mcagent.build.Reservation::x),
+                    Codec.INT.fieldOf("y").forGetter(com.bhautik.mcagent.build.Reservation::y),
+                    Codec.INT.fieldOf("z").forGetter(com.bhautik.mcagent.build.Reservation::z),
+                    Codec.INT.fieldOf("w").forGetter(com.bhautik.mcagent.build.Reservation::width),
+                    Codec.INT.fieldOf("h").forGetter(com.bhautik.mcagent.build.Reservation::height),
+                    Codec.INT.fieldOf("l").forGetter(com.bhautik.mcagent.build.Reservation::length)
+            ).apply(instance, com.bhautik.mcagent.build.Reservation::new));
 
     // The enchanting-table fields are optional so bases saved before the
     // enchanting milestone still load instead of dropping the whole base.
@@ -38,8 +57,16 @@ public final class BaseSavedState extends SavedData {
                             .forGetter(s -> s.hasEnchantTable),
                     Codec.INT.optionalFieldOf("enchant_x", 0).forGetter(s -> s.enchantX),
                     Codec.INT.optionalFieldOf("enchant_y", 0).forGetter(s -> s.enchantY),
-                    Codec.INT.optionalFieldOf("enchant_z", 0).forGetter(s -> s.enchantZ)
+                    Codec.INT.optionalFieldOf("enchant_z", 0).forGetter(s -> s.enchantZ),
+                    Codec.BOOL.optionalFieldOf("has_farm", false)
+                            .forGetter(s -> s.hasFarm),
+                    Codec.INT.optionalFieldOf("farm_x", 0).forGetter(s -> s.farmX),
+                    Codec.INT.optionalFieldOf("farm_y", 0).forGetter(s -> s.farmY),
+                    Codec.INT.optionalFieldOf("farm_z", 0).forGetter(s -> s.farmZ),
+                    RESERVATION_CODEC.listOf().optionalFieldOf("reservations",
+                            java.util.List.of()).forGetter(s -> s.reservations)
             ).apply(instance, BaseSavedState::new));
+
 
     public static final SavedDataType<BaseSavedState> TYPE = new SavedDataType<>(
             net.minecraft.resources.Identifier.parse("mcagent:base"),
@@ -53,7 +80,14 @@ public final class BaseSavedState extends SavedData {
     private BaseSavedState(int anchorX, int anchorY, int anchorZ, boolean hasChest,
                            int chestX, int chestY, int chestZ,
                            boolean hasEnchantTable, int enchantX, int enchantY,
-                           int enchantZ) {
+                           int enchantZ, boolean hasFarm, int farmX, int farmY,
+                           int farmZ,
+                           java.util.List<com.bhautik.mcagent.build.Reservation> reservations) {
+        this.reservations = new java.util.ArrayList<>(reservations);
+        this.hasFarm = hasFarm;
+        this.farmX = farmX;
+        this.farmY = farmY;
+        this.farmZ = farmZ;
         this.anchorX = anchorX;
         this.anchorY = anchorY;
         this.anchorZ = anchorZ;
@@ -120,5 +154,33 @@ public final class BaseSavedState extends SavedData {
 
     public int[] enchantTable() {
         return hasEnchantTable ? new int[]{enchantX, enchantY, enchantZ} : null;
+    }
+
+    public boolean hasFarm() {
+        return hasFarm;
+    }
+
+    /** Records the crop plot tilled at the base, so harvests return to it. */
+    public void setFarm(int x, int y, int z) {
+        this.hasFarm = true;
+        this.farmX = x;
+        this.farmY = y;
+        this.farmZ = z;
+        setDirty();
+    }
+
+    public int[] farm() {
+        return hasFarm ? new int[]{farmX, farmY, farmZ} : null;
+    }
+
+    /** Every patch of ground already committed to a structure. */
+    public java.util.List<com.bhautik.mcagent.build.Reservation> reservations() {
+        return java.util.List.copyOf(reservations);
+    }
+
+    /** Claims ground for a structure so later builds are placed clear of it. */
+    public void reserve(com.bhautik.mcagent.build.Reservation reservation) {
+        reservations.add(reservation);
+        setDirty();
     }
 }

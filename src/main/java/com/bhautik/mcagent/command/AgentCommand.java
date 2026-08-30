@@ -56,6 +56,13 @@ public final class AgentCommand {
                                                 goalService,
                                                 StringArgumentType.getString(context, "item"),
                                                 IntegerArgumentType.getInteger(context, "level"))))))
+                .then(Commands.literal("build")
+                        .executes(context -> listBlueprints(context.getSource(), goalService))
+                        .then(Commands.argument("blueprint", StringArgumentType.word())
+                                .executes(context -> build(
+                                        context.getSource(),
+                                        goalService,
+                                        StringArgumentType.getString(context, "blueprint")))))
                 .then(Commands.literal("base")
                         .executes(context -> runBase(context.getSource(), goalService))
                         .then(Commands.literal("here")
@@ -94,7 +101,7 @@ public final class AgentCommand {
     }
 
     private static int sendUsage(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item|kit> <count> | /agent explore <biome|structure> | /agent base here | /agent stash <item|junk> [all|count] | /agent restock <torches|food|item> [count] | /agent enchant <item> [level] | /agent return | /agent goal | /agent cancel"), false);
+        source.sendSuccess(() -> Component.literal("Usage: /agent status | /agent get <item|kit> <count> | /agent explore <biome|structure> | /agent base here | /agent stash <item|junk> [all|count] | /agent restock <torches|food|item> [count] | /agent enchant <item> [level] | /agent build [blueprint] | /agent return | /agent goal | /agent cancel"), false);
         return 1;
     }
 
@@ -158,6 +165,35 @@ public final class AgentCommand {
             com.bhautik.mcagent.McAgent.LOGGER.error("[Agent] /agent enchant failed",
                     failure);
             source.sendFailure(Component.literal("Enchant check failed: " + failure));
+            return 0;
+        }
+    }
+
+    private static int listBlueprints(CommandSourceStack source, GoalService goalService) {
+        source.sendSuccess(() -> Component.literal("Blueprints: "
+                + goalService.blueprintNames()
+                + " (drop .nbt structure files in "
+                + com.bhautik.mcagent.integration.NbtBlueprintLoader.BLUEPRINT_DIR + ")"),
+                false);
+        return 1;
+    }
+
+    private static int build(CommandSourceStack source, GoalService goalService,
+                             String blueprint) throws CommandSyntaxException {
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            String report = goalService.build(player, blueprint);
+            if (report.startsWith("Invalid")) {
+                source.sendFailure(Component.literal(report));
+                return 0;
+            }
+            source.sendSuccess(() -> Component.literal(report), false);
+            return 1;
+        } catch (CommandSyntaxException syntax) {
+            throw syntax;
+        } catch (Exception failure) {
+            com.bhautik.mcagent.McAgent.LOGGER.error("[Agent] /agent build failed", failure);
+            source.sendFailure(Component.literal("Build failed: " + failure));
             return 0;
         }
     }
