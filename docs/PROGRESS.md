@@ -34,7 +34,7 @@ master.
 | Restock from base | `/agent restock torches/food/<item>` | ✅ Done | master |
 | Base-supply crediting in plans | goals started at base use stored items | ✅ Done | master |
 | Enchanting E1 XP sensing | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
-| Enchanting E5 enchant goal (acts: item + lapis + table + enchant) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
+| Enchanting E5 enchant goal (acts: item + lapis + table + enchant) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done, verified in-game | feat/enchanting |
 | Enchanting E3 leather (cow hunting) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
 | Enchanting E2 XP farming | [ENCHANTING.md](ENCHANTING.md) | ✅ Done (ore mining; low levels only) | feat/enchanting |
 | Enchanting E6/E7 (bookshelf ring, villager trading) | [ENCHANTING.md](ENCHANTING.md) | ⬜ Designed, not built | - |
@@ -60,6 +60,9 @@ master.
 /agent enchant <item> [level]        enchant goal: secures item + lapis,
                                      builds a permanent enchanting table
                                      at base, walks back to it, enchants
+/agent build [blueprint]             raise a structure from a blueprint
+/agent resume                        pick the last goal back up, or unstick
+                                     a run whose action wedged
 /agent goal                          live goal progress
 /agent cancel                        stop goal + navigation
 ```
@@ -113,6 +116,12 @@ master.
 - Farming needs soil within 4 blocks of water; away from water the plan
   fails honestly rather than tilling ground that will dry out
 - No pen or enclosure is built; bred animals wander freely
+- Obsidian is MADE reliably (water on lava, water reclaimed afterwards)
+  but HARVESTING it is unreliable: the block forms in the lava surface
+  and navigation often reports "unable to find any path to obsidian".
+  Bridging to an awkward block is not implemented
+- Farming and blueprint building are proof-of-concept: neither has been
+  seen through a full cycle in the client
 - Netherite unreachable (smithing + nether not implemented)
 - Auto-restock before goals is command-driven only (`/agent restock`);
   automatic pre-goal restocking is a future refinement
@@ -135,7 +144,7 @@ master.
 | 5 | M10 Building foundation | blueprint placement + structure verification | M-L | ⬜ |
 | 6 | Kit expansion | gold/mixed kits ("starter kit") | S | ⬜ |
 | 7 | Cave exploration | exposed-ore seeking, y-level targeting | L | ⬜ |
-| 8 | Enchanting | XP tracking + table interaction + book chain; designed in [ENCHANTING.md](ENCHANTING.md), slice E1 (XP sensing + readiness) done | L | 🟡 E1 |
+| 8 | Enchanting | XP tracking + table interaction + book chain; see [ENCHANTING.md](ENCHANTING.md). Verified end to end in-game: obsidian from lava -> table -> enchant | L | ✅ |
 | 9 | Nether progression | portals, fortresses, netherite (UC-10 endgame) | XL | ⬜ |
 | 10 | Natural language | parser/LLM front-end (§18) | L | ⬜ |
 

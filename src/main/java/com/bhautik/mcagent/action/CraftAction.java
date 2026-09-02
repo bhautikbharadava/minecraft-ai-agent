@@ -24,6 +24,8 @@ public final class CraftAction implements AgentAction {
      * let the craft proceed instead of failing the goal outright.
      */
     public static final int REFUSAL_STREAK = 60;
+    /** Ticks between individual crafts, so the work is visible. */
+    public static final int TICKS_BETWEEN_CRAFTS = 4;
 
     /** Performs real grid crafting; returns the number of crafts completed. */
     public interface Crafter {
@@ -40,6 +42,7 @@ public final class CraftAction implements AgentAction {
     private ActionStatus status = ActionStatus.PENDING;
     private String failureReason;
     private int issued;
+    private int craftCooldown;
     private int failStreak;
     private int idleAfterIssue;
     private int stepTarget;
@@ -109,6 +112,14 @@ public final class CraftAction implements AgentAction {
                 fail("crafting table is no longer within range");
                 return;
             }
+            // Pace the crafts. Doing them all inside a tick made items
+            // appear from nowhere with nothing to watch; a player takes a
+            // moment per craft and this should look the same.
+            if (craftCooldown > 0) {
+                craftCooldown--;
+                return;
+            }
+            craftCooldown = TICKS_BETWEEN_CRAFTS;
             int completed = crafter.craft(recipe, 1);
             issued += completed;
             if (completed <= 0) {

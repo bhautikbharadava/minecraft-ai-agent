@@ -90,7 +90,7 @@ public final class BuildSiteFinder {
         for (int dy = 3; dy >= -3; dy--) {
             var pos = column.offset(0, dy, 0);
             if (!level.getBlockState(pos).isAir()
-                    && level.getBlockState(pos.above()).isAir()) {
+                    && VanillaPlacementExecutor.isClear(level.getBlockState(pos.above()))) {
                 return pos.immutable();
             }
         }
@@ -118,7 +118,7 @@ public final class BuildSiteFinder {
                 boolean usable = blueprint.needsSoil()
                         ? isSoil(level, pos)
                         : !level.getBlockState(pos).isAir();
-                boolean clearAbove = level.getBlockState(pos.above()).isAir();
+                boolean clearAbove = VanillaPlacementExecutor.isClear(level.getBlockState(pos.above()));
                 boolean level0 = Math.abs(surfaceOffset(level, pos)) <= MAX_UNEVENNESS;
                 if (!usable || !clearAbove || !level0) {
                     bad++;
@@ -132,11 +132,13 @@ public final class BuildSiteFinder {
     private static int surfaceOffset(Level level, BlockPos pos) {
         for (int dy = 0; dy <= MAX_UNEVENNESS; dy++) {
             if (!level.getBlockState(pos.offset(0, dy, 0)).isAir()
-                    && level.getBlockState(pos.offset(0, dy + 1, 0)).isAir()) {
+                    && VanillaPlacementExecutor.isClear(
+                            level.getBlockState(pos.offset(0, dy + 1, 0)))) {
                 return dy;
             }
             if (!level.getBlockState(pos.offset(0, -dy, 0)).isAir()
-                    && level.getBlockState(pos.offset(0, -dy + 1, 0)).isAir()) {
+                    && VanillaPlacementExecutor.isClear(
+                            level.getBlockState(pos.offset(0, -dy + 1, 0)))) {
                 return -dy;
             }
         }

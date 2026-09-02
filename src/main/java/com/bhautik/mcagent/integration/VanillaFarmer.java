@@ -50,7 +50,7 @@ public final class VanillaFarmer {
                             boolean soil = state.is(Blocks.GRASS_BLOCK)
                                     || state.is(Blocks.DIRT)
                                     || state.is(Blocks.FARMLAND);
-                            if (!soil || !level.getBlockState(pos.above()).isAir()) {
+                            if (!soil || !VanillaPlacementExecutor.isClear(level.getBlockState(pos.above()))) {
                                 continue;
                             }
                             if (!nearWater(player, pos)) {
@@ -93,6 +93,11 @@ public final class VanillaFarmer {
                         if (!nearWater(player, pos)) {
                             continue; // would dry out and revert
                         }
+                        // Clear whatever is growing on top; farmland with a
+                        // vine over it has nowhere to put a seed.
+                        if (!level.getBlockState(pos.above()).isAir()) {
+                            level.destroyBlock(pos.above(), true, player);
+                        }
                         level.setBlock(pos, Blocks.FARMLAND.defaultBlockState(), 3);
                         if (level.getBlockState(pos).is(Blocks.FARMLAND)) {
                             tilled++;
@@ -120,8 +125,13 @@ public final class VanillaFarmer {
                             }
                             var pos = origin.offset(dx, dy, dz);
                             if (!level.getBlockState(pos).is(Blocks.FARMLAND)
-                                    || !level.getBlockState(pos.above()).isAir()) {
+                                    || !VanillaPlacementExecutor.isClear(level.getBlockState(pos.above()))) {
                                 continue;
+                            }
+                            // Break any grass or vine standing there first,
+                            // so it drops instead of being erased by the crop.
+                            if (!level.getBlockState(pos.above()).isAir()) {
+                                level.destroyBlock(pos.above(), true, player);
                             }
                             level.setBlock(pos.above(), crop.defaultBlockState(), 3);
                             ItemStack seeds = player.getInventory().getItem(slot);
@@ -207,7 +217,7 @@ public final class VanillaFarmer {
             var state = level.getBlockState(pos);
             boolean soil = state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT)
                     || state.is(Blocks.FARMLAND);
-            if (soil && level.getBlockState(pos.above()).isAir()) {
+            if (soil && VanillaPlacementExecutor.isClear(level.getBlockState(pos.above()))) {
                 return pos.immutable();
             }
         }

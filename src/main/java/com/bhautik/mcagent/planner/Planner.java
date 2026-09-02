@@ -297,9 +297,11 @@ public final class Planner {
                                          IntSupplier enchantedCount,
                                          String itemId,
                                          int minLevel,
-                                         BlockLocator.BlockSite homeSite) {
+                                         BlockLocator.BlockSite homeSite,
+                                         Set<String> demandedOut) {
         Expansion expansion = new Expansion(resolver, plannedCounts, ownedItemIds,
                 liveCounts, environment);
+        expansion.demanded = demandedOut;
         // The item itself: acquire it when the agent is not carrying one.
         expansion.expand(itemId, 1, true);
         int carriedLapis = Math.max(plannedCounts.apply(LAPIS_ITEM), 0);

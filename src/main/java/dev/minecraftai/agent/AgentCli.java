@@ -1130,7 +1130,7 @@ public final class AgentCli {
                 id -> 0, environment,
                 (item, level) -> com.bhautik.mcagent.action.EnchantAction.Enchanter
                         .Result.ok(),
-                () -> 0, "minecraft:diamond_sword", 1, null);
+                () -> 0, "minecraft:diamond_sword", 1, null, new java.util.LinkedHashSet<>());
         boolean topsUpTorches = enchantPlan.stream()
                 .anyMatch(step -> step.title().contains("torch"));
         if (!topsUpTorches) {
@@ -1160,6 +1160,11 @@ public final class AgentCli {
                     }
                     @Override public boolean carriesWater() {
                         return false;
+                    }
+                    @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
+                            nearestPourable(int radius) {
+                        return Optional.of(new com.bhautik.mcagent.world.BlockLocator
+                                .BlockSite(5, 60, 5));
                     }
                 };
         var lavaEnv = envWithFluids(crafter, placer,

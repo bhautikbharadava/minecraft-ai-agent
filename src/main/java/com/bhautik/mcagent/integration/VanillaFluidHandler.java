@@ -39,6 +39,38 @@ public final class VanillaFluidHandler {
             }
 
             @Override
+            public Optional<BlockLocator.BlockSite> nearestPourable(int radius) {
+                var level = player.level();
+                var origin = player.blockPosition();
+                for (int shell = 0; shell <= radius; shell++) {
+                    for (int dx = -shell; dx <= shell; dx++) {
+                        for (int dy = -shell; dy <= shell; dy++) {
+                            for (int dz = -shell; dz <= shell; dz++) {
+                                if (Math.max(Math.max(Math.abs(dx), Math.abs(dy)),
+                                        Math.abs(dz)) != shell) {
+                                    continue;
+                                }
+                                var pos = origin.offset(dx, dy, dz);
+                                var fluid = level.getFluidState(pos);
+                                if (!fluid.isSource() || !fluid.getType()
+                                        .isSame(net.minecraft.world.level.material.Fluids.LAVA)) {
+                                    continue;
+                                }
+                                // Room above is what makes it pourable.
+                                if (!VanillaPlacementExecutor.isClear(
+                                        level.getBlockState(pos.above()))) {
+                                    continue;
+                                }
+                                return Optional.of(new BlockLocator.BlockSite(
+                                        pos.getX(), pos.getY(), pos.getZ()));
+                            }
+                        }
+                    }
+                }
+                return Optional.empty();
+            }
+
+            @Override
             public boolean carriesWater() {
                 return findItem(player, Items.WATER_BUCKET) >= 0;
             }

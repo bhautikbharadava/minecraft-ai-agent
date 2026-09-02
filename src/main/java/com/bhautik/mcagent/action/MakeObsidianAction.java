@@ -45,10 +45,16 @@ public final class MakeObsidianAction implements AgentAction {
     public static final int DESCEND_TIMEOUT_TICKS = 20 * 120;
     /** Ticks spent roaming at depth before admitting there is no lava. */
     public static final int SEEK_TIMEOUT_TICKS = 20 * 120;
+    /** Phase switches allowed before the action admits it is thrashing. */
+    public static final int MAX_PHASE_CHANGES = 40;
+    /** Tries against one lava source before writing it off. */
+    public static final int POUR_ATTEMPTS_PER_SOURCE = 40;
+    /** Ticks spent trying to scoop the poured water back up. */
+    public static final int RECLAIM_TIMEOUT_TICKS = 20 * 15;
     /** Ticks before the whole attempt is abandoned. */
     public static final int TIMEOUT_TICKS = 20 * 300;
 
-    private enum Phase { FILLING, DESCENDING, SEEKING, POURING }
+    private enum Phase { FILLING, DESCENDING, SEEKING, POURING, RECLAIMING }
 
     private final String title;
     private final int targetCount;
@@ -70,6 +76,13 @@ public final class MakeObsidianAction implements AgentAction {
     private BlockLocator.BlockSite cachedTarget;
     private String cachedFluid;
     private BlockLocator.BlockSite goal;
+    /** Where the last pour left water, so the bucket can take it back. */
+    private BlockLocator.BlockSite waterAt;
+    /** Lava that cannot be poured onto - buried, or with no room above. */
+    private final java.util.Set<BlockLocator.BlockSite> unusableLava =
+            new java.util.HashSet<>();
+    private int pourAttempts;
+    private int phaseChanges;
 
     public MakeObsidianAction(int targetCount, IntSupplier obsidianBlocksNearby,
                               FluidHandler fluids, BaritoneIntegration navigation,
@@ -135,6 +148,7 @@ public final class MakeObsidianAction implements AgentAction {
             case DESCENDING -> descend();
             case SEEKING -> seekLava();
             case POURING -> pour();
+            case RECLAIMING -> reclaimWater();
         }
     }
 
@@ -162,7 +176,7 @@ public final class MakeObsidianAction implements AgentAction {
      * the goal, so this doubles as the "get underground" step.
      */
     private void descend() {
-        var lava = scanFor(LAVA);
+        var lava = pourableLava();
         if (lava != null) {
             enter(Phase.POURING);
             return;
@@ -186,7 +200,7 @@ public final class MakeObsidianAction implements AgentAction {
 
     /** Roams at depth until lava turns up, or the search budget runs out. */
     private void seekLava() {
-        var lava = scanFor(LAVA);
+        var lava = pourableLava();
         if (lava != null) {
             navigation.stop();
             goal = null;
@@ -213,8 +227,10 @@ public final class MakeObsidianAction implements AgentAction {
     }
 
     private void pour() {
-        var lava = scanFor(LAVA);
+        var lava = pourableLava();
         if (lava == null) {
+            // Nothing here we can use; roam for a different lake rather
+            // than pouring at the same buried source forever.
             goal = null;
             enter(Phase.SEEKING);
             return;
@@ -228,9 +244,67 @@ public final class MakeObsidianAction implements AgentAction {
             return;
         }
         if (fluids.pourOnto(lava)) {
-            // Verified next tick by the obsidian block count.
+            // Water is poured into the block above the lava; remember it so
+            // the bucket can be refilled from it.
+            waterAt = new BlockLocator.BlockSite(lava.x(), lava.y() + 1, lava.z());
+            pourAttempts = 0;
             invalidateScan();
             goal = null;
+            enter(Phase.RECLAIMING);
+            return;
+        }
+        // Pouring can fail forever on one source - lava buried under rock
+        // has nowhere to take the water. Give up on this one and look
+        // elsewhere instead of retrying it every tick.
+        if (++pourAttempts > POUR_ATTEMPTS_PER_SOURCE) {
+            unusableLava.add(lava);
+            pourAttempts = 0;
+            invalidateScan();
+            goal = null;
+            McAgent.LOGGER.info("[Action] Cannot pour onto lava at {} {} {}"
+                    + " (no room above?); looking for another source",
+                    lava.x(), lava.y(), lava.z());
+            enter(Phase.SEEKING);
+        }
+    }
+
+    /**
+     * Takes the poured water back, the way a player does.
+     *
+     * <p>Two reasons this matters: the bucket is reusable, so the next
+     * pour needs no trip back to a water source; and obsidian left under
+     * water is awkward to mine - navigation avoids it - so the block we
+     * just made would sit there unharvested.
+     */
+    private void reclaimWater() {
+        if (waterAt == null) {
+            enter(Phase.SEEKING);
+            return;
+        }
+        if (fluids.carriesWater()) {
+            // Already holding it; back to work.
+            waterAt = null;
+            enter(Phase.SEEKING);
+            return;
+        }
+        if (!withinReach(waterAt)) {
+            walkTo(waterAt);
+            return;
+        }
+        if (fluids.fillFrom(waterAt)) {
+            McAgent.LOGGER.info("[Action] Picked the water back up");
+            waterAt = null;
+            invalidateScan();
+            goal = null;
+            enter(Phase.SEEKING);
+            return;
+        }
+        // The water flowed away or was never a source; carry on without it
+        // rather than standing here.
+        if (phaseTicks > RECLAIM_TIMEOUT_TICKS) {
+            McAgent.LOGGER.warn("[Action] Could not recover the poured water");
+            waterAt = null;
+            enter(Phase.FILLING);
         }
     }
 
@@ -239,6 +313,16 @@ public final class MakeObsidianAction implements AgentAction {
      * every tick. Keyed by fluid, or a cached water position would be
      * handed back when lava was asked for.
      */
+    private BlockLocator.BlockSite pourableLava() {
+        if (sinceScan < SCAN_INTERVAL_TICKS && LAVA.equals(cachedFluid)) {
+            return cachedTarget;
+        }
+        sinceScan = 0;
+        cachedFluid = LAVA;
+        cachedTarget = fluids.nearestPourable(SEARCH_RADIUS).orElse(null);
+        return cachedTarget;
+    }
+
     private BlockLocator.BlockSite scanFor(String fluidId) {
         if (fluidId.equals(cachedFluid) && sinceScan < SCAN_INTERVAL_TICKS) {
             return cachedTarget;
@@ -268,6 +352,16 @@ public final class MakeObsidianAction implements AgentAction {
     }
 
     private void enter(Phase next) {
+        // Phase changes reset the per-phase clock, so two phases flipping
+        // back and forth would never time out. Count the flips and fail
+        // honestly rather than thrashing until the global timeout.
+        if (++phaseChanges > MAX_PHASE_CHANGES) {
+            navigation.stop();
+            searchExhausted = true;
+            fail("stopped making progress (cycled between " + phase + " and "
+                    + next + "); no usable lava reachable here");
+            return;
+        }
         phase = next;
         phaseTicks = 0;
         invalidateScan();

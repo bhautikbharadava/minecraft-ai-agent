@@ -65,6 +65,19 @@ public final class VanillaPlacementExecutor {
         return found;
     }
 
+    /**
+     * Whether a position counts as unobstructed for placing or working.
+     *
+     * <p>Air is not the only clear space: cave vines, grass, moss carpet,
+     * seagrass and snow are all REPLACEABLE, and a player places straight
+     * through them. Testing {@code isAir()} alone treats a glow berry
+     * vine as a wall, which blocked placement, tilling and site surveys
+     * on ground that was perfectly usable.
+     */
+    public static boolean isClear(net.minecraft.world.level.block.state.BlockState state) {
+        return state.isAir() || state.canBeReplaced();
+    }
+
     /** Locator for a specific block item id ("minecraft:crafting_table"). */
     public static BlockLocator blockLocator(ServerPlayer player, String blockItemId,
                                             int radius) {
