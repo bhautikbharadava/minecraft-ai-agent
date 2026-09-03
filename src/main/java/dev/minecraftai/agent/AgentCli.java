@@ -1340,6 +1340,50 @@ public final class AgentCli {
             throw new IllegalStateException("a reservation must cover its own centre");
         }
 
+        // The enchanting room must match vanilla's power geometry exactly.
+        // Shelves only count from radius 2, and only while radius 1 is
+        // empty at both levels - get it wrong and the room looks correct
+        // but enchants at level 3.
+        var room = com.bhautik.mcagent.build.Blueprints.enchantingRoom();
+        var shelves = room.placements().stream()
+                .filter(pl -> "minecraft:bookshelf".equals(pl.blockId()))
+                .toList();
+        assertIntEquals(shelves.size(), 15, "bookshelves for full power");
+        // Vanilla caps power at 15; more would be wasted leather.
+        for (var shelf : shelves) {
+            int ring = Math.max(Math.abs(shelf.dx()), Math.abs(shelf.dz()));
+            assertIntEquals(ring, 2, "shelf must sit at radius 2");
+            assertIntEquals(shelf.dy(), 0, "shelf must sit at the table's level");
+        }
+        // Every radius-1 position must be explicitly cleared on both levels.
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue; // the table itself
+                }
+                for (int dy = 0; dy <= 1; dy++) {
+                    int fx = dx;
+                    int fz = dz;
+                    int fy = dy;
+                    boolean cleared = room.placements().stream().anyMatch(pl ->
+                            pl.dx() == fx && pl.dy() == fy && pl.dz() == fz
+                                    && com.bhautik.mcagent.build.Blueprint.AIR
+                                            .equals(pl.blockId()));
+                    if (!cleared) {
+                        throw new IllegalStateException(
+                                "radius-1 gap not cleared at " + fx + "," + fy + ","
+                                        + fz + " - shelves will not count");
+                    }
+                }
+            }
+        }
+        if (!room.materials().containsKey("minecraft:enchanting_table")) {
+            throw new IllegalStateException("the room must include the table itself");
+        }
+        if (room.needsSoil()) {
+            throw new IllegalStateException("an enchanting room does not need farmland");
+        }
+
         // Items with no block AND no mob source still fail honestly.
         try {
             planner.planAcquisition(resolver, torchStocked(), Set.of(), id -> 0,

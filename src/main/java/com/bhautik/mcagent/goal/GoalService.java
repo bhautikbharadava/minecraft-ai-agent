@@ -1040,6 +1040,15 @@ public final class GoalService {
                 // Same for the crop plot: harvests return to one field.
                 rememberFarmPlot(player);
             }
+            if (activeRun.blueprint != null && activeRun.buildVerified
+                    && activeRun.blueprint.materials()
+                            .containsKey(com.bhautik.mcagent.planner.Planner
+                                    .ENCHANTING_TABLE_ITEM)) {
+                // A room built around a table IS the enchanting setup, so
+                // record it; otherwise the next enchant ignores the room
+                // it just paid 45 leather for and builds a bare table.
+                rememberEnchantTable(player, true);
+            }
             if (activeRun.blueprint != null && activeRun.buildSite != null
                     && activeRun.buildVerified) {
                 // Claim the ground only for a structure that really went
@@ -1582,6 +1591,16 @@ public final class GoalService {
 
     /** Remembers a freshly built enchanting table as base infrastructure. */
     private void rememberEnchantTable(ServerPlayer player) {
+        rememberEnchantTable(player, false);
+    }
+
+    /**
+     * @param replaceExisting true when a purpose-built enchanting room
+     *        should supersede an earlier bare table - otherwise the agent
+     *        keeps walking to the old one and the room's bookshelves
+     *        never raise a single offer
+     */
+    private void rememberEnchantTable(ServerPlayer player, boolean replaceExisting) {
         if (player == null) {
             return;
         }
@@ -1590,7 +1609,7 @@ public final class GoalService {
             return;
         }
         var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
-        if (state.hasEnchantTable()) {
+        if (state.hasEnchantTable() && !replaceExisting) {
             return;
         }
         com.bhautik.mcagent.integration.VanillaPlacementExecutor

@@ -37,7 +37,8 @@ master.
 | Enchanting E5 enchant goal (acts: item + lapis + table + enchant) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done, verified in-game | feat/enchanting |
 | Enchanting E3 leather (cow hunting) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
 | Enchanting E2 XP farming | [ENCHANTING.md](ENCHANTING.md) | ✅ Done (ore mining; low levels only) | feat/enchanting |
-| Enchanting E6/E7 (bookshelf ring, villager trading) | [ENCHANTING.md](ENCHANTING.md) | ⬜ Designed, not built | - |
+| Enchanting E6 bookshelf ring (`/agent build enchanting_room`) | [ENCHANTING.md](ENCHANTING.md) | ✅ Built, not yet run in-game | feat/enchanting |
+| Enchanting E7 villager trading (targeted enchants) | [ENCHANTING.md](ENCHANTING.md) | ⬜ Designed, not built | - |
 | M10 Building foundation | §17 M10 | ⬜ Backlog | - |
 | M11 Farm building | §16 UC-11, §17 M11 | ⬜ Backlog | - |
 | M12 Natural language | §18, §17 M12 | ⬜ Backlog | - |
@@ -61,6 +62,7 @@ master.
                                      builds a permanent enchanting table
                                      at base, walks back to it, enchants
 /agent build [blueprint]             raise a structure from a blueprint
+                                     (wheat_farm, enchanting_room)
 /agent resume                        pick the last goal back up, or unstick
                                      a run whose action wedged
 /agent goal                          live goal progress
@@ -108,8 +110,9 @@ master.
   farms the shortfall by mining coal ore. **Ore XP is slow** (level 30 =
   1395 points, roughly a thousand ore blocks), so high level targets give
   up with a progress report rather than digging forever - a mob grinder
-  is the realistic route and is not built. Bookshelf rings are not placed,
-  so offers stay in the low range
+  is the realistic route and is not built. `/agent build enchanting_room`
+  raises the 15-shelf ring that lifts offers toward 30, but XP remains
+  the binding constraint
 - Crops grow on the world clock: without bone meal a wheat harvest takes
   minutes of real time, and the agent waits through it rather than doing
   other work. Bone meal (when carried) skips the wait
