@@ -26,6 +26,8 @@ public final class VanillaEnchanter {
     private static final int LAPIS_SLOT = 1;
     /** The table offers exactly three options. */
     private static final int OFFERS = 3;
+    /** Vanilla charges one to three lapis per offer. */
+    private static final int LAPIS_PER_ENCHANT = 3;
     /** Menu id for a container the client never sees. */
     private static final int SERVER_SIDE_CONTAINER_ID = 1;
 
@@ -60,9 +62,15 @@ public final class VanillaEnchanter {
 
             // Move the item + lapis into the menu, then let vanilla roll
             // the offers exactly as it would for a player at the table.
-            ItemStack target = player.getInventory().getItem(itemSlot).copy();
-            ItemStack lapis = player.getInventory().getItem(lapisSlot).copy();
-            ItemStack payment = lapis.copyWithCount(Math.min(lapis.getCount(), 3));
+            // Put ONE item and at most three lapis into the menu, and
+            // remember how much lapis went in. Handing the menu whole
+            // stacks and then writing back only what it returned destroyed
+            // the remainder: a slot of 64 lapis came back holding 1.
+            ItemStack target = player.getInventory().getItem(itemSlot).copyWithCount(1);
+            int lapisCarried = player.getInventory().getItem(lapisSlot).getCount();
+            ItemStack payment = player.getInventory().getItem(lapisSlot)
+                    .copyWithCount(Math.min(lapisCarried, LAPIS_PER_ENCHANT));
+            int lapisOffered = payment.getCount();
 
             menu.getSlot(ITEM_SLOT).set(target);
             menu.getSlot(LAPIS_SLOT).set(payment);
@@ -90,12 +98,24 @@ public final class VanillaEnchanter {
                         .failed("table produced no enchantment");
             }
 
-            // Write the enchanted stack back and pay the lapis. clickMenuButton
-            // already spent the XP levels through vanilla.
-            player.getInventory().setItem(itemSlot, enchanted.copy());
-            ItemStack leftover = menu.getSlot(LAPIS_SLOT).getItem();
-            player.getInventory().setItem(lapisSlot,
-                    leftover.isEmpty() ? ItemStack.EMPTY : leftover.copy());
+            // Pay for exactly what was used and leave the rest of each
+            // stack alone. clickMenuButton already spent the XP levels.
+            var inventory = player.getInventory();
+            ItemStack sourceStack = inventory.getItem(itemSlot);
+            sourceStack.shrink(1); // the one copy that went into the menu
+            inventory.setItem(itemSlot,
+                    sourceStack.isEmpty() ? ItemStack.EMPTY : sourceStack);
+            ItemStack enchantedCopy = enchanted.copy();
+            if (!inventory.add(enchantedCopy)) {
+                player.drop(enchantedCopy, false); // bag full; better than deleting it
+            }
+            int lapisSpent = lapisOffered - menu.getSlot(LAPIS_SLOT).getItem().getCount();
+            if (lapisSpent > 0) {
+                ItemStack lapisStack = inventory.getItem(lapisSlot);
+                lapisStack.shrink(lapisSpent);
+                inventory.setItem(lapisSlot,
+                        lapisStack.isEmpty() ? ItemStack.EMPTY : lapisStack);
+            }
             menu.getSlot(ITEM_SLOT).set(ItemStack.EMPTY);
             menu.getSlot(LAPIS_SLOT).set(ItemStack.EMPTY);
             menu.removed(player);

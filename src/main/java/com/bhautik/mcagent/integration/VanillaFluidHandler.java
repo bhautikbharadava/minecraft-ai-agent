@@ -86,10 +86,19 @@ public final class VanillaFluidHandler {
                 if (!level.getFluidState(pos).isSource()) {
                     return false;
                 }
-                // Take the source and hand back a filled bucket.
+                // Take the source and hand back a filled bucket. Empty
+                // buckets STACK, so overwriting the slot would destroy the
+                // rest of the stack - spend one and add the filled one.
                 level.setBlock(pos, net.minecraft.world.level.block.Blocks.AIR
                         .defaultBlockState(), 3);
-                player.getInventory().setItem(slot, new ItemStack(Items.WATER_BUCKET));
+                var inventory = player.getInventory();
+                ItemStack buckets = inventory.getItem(slot);
+                buckets.shrink(1);
+                inventory.setItem(slot, buckets.isEmpty() ? ItemStack.EMPTY : buckets);
+                ItemStack filled = new ItemStack(Items.WATER_BUCKET);
+                if (!inventory.add(filled)) {
+                    player.drop(filled, false);
+                }
                 return true;
             }
 
@@ -118,6 +127,8 @@ public final class VanillaFluidHandler {
                 if (!emptied) {
                     return false;
                 }
+                // A water bucket never stacks, so the slot held exactly
+                // one; swapping it for the empty is safe.
                 player.getInventory().setItem(slot, new ItemStack(Items.BUCKET));
                 return true;
             }

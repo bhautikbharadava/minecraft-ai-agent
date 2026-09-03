@@ -38,6 +38,11 @@ public final class VanillaStorage {
                     continue;
                 }
                 if (tryStore(chest, stack)) {
+                    // Name what left the bag. "3 stacks stored" makes an
+                    // unexpectedly missing item impossible to trace.
+                    com.bhautik.mcagent.McAgent.LOGGER.info(
+                            "[Storage] Stashed {} x{} into the base chest",
+                            idOf(stack), stack.getCount());
                     moved++;
                     inventory.removeItem(slot, stack.getCount());
                 }
@@ -66,6 +71,9 @@ public final class VanillaStorage {
                     continue;
                 }
                 if (player.getInventory().add(stack.copy())) {
+                    com.bhautik.mcagent.McAgent.LOGGER.info(
+                            "[Storage] Took {} x{} from the base chest",
+                            idOf(stack), stack.getCount());
                     chest.removeItem(slot, stack.getCount());
                     moved++;
                 } else {
