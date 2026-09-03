@@ -38,6 +38,11 @@ public final class VanillaStorage {
                     continue;
                 }
                 if (tryStore(chest, stack)) {
+                    // Name what left the bag. "3 stacks stored" makes an
+                    // unexpectedly missing item impossible to trace.
+                    com.bhautik.mcagent.McAgent.LOGGER.info(
+                            "[Storage] Stashed {} x{} into the base chest",
+                            idOf(stack), stack.getCount());
                     moved++;
                     inventory.removeItem(slot, stack.getCount());
                 }
@@ -66,6 +71,9 @@ public final class VanillaStorage {
                     continue;
                 }
                 if (player.getInventory().add(stack.copy())) {
+                    com.bhautik.mcagent.McAgent.LOGGER.info(
+                            "[Storage] Took {} x{} from the base chest",
+                            idOf(stack), stack.getCount());
                     chest.removeItem(slot, stack.getCount());
                     moved++;
                 } else {
@@ -127,9 +135,20 @@ public final class VanillaStorage {
      */
     public static java.util.List<Container> nearbyContainers(
             ServerPlayer player, int radius) {
+        return containersAround(player.level(), player.blockPosition(), radius);
+    }
+
+    /**
+     * Containers around an arbitrary position.
+     *
+     * <p>Needed because base stock has to be readable from anywhere: a
+     * player-relative scan only ever saw the base chest while the agent
+     * happened to be standing on it, so plans re-gathered materials they
+     * already owned.
+     */
+    public static java.util.List<Container> containersAround(
+            net.minecraft.world.level.Level level, BlockPos origin, int radius) {
         java.util.List<Container> containers = new java.util.ArrayList<>();
-        BlockPos origin = player.blockPosition();
-        var level = player.level();
         for (BlockPos pos : BlockPos.betweenClosed(
                 origin.offset(-radius, -radius, -radius),
                 origin.offset(radius, radius, radius))) {
@@ -145,8 +164,14 @@ public final class VanillaStorage {
 
     /** Per-item totals across every nearby container. */
     public static Map<String, Integer> storedTotals(ServerPlayer player, int radius) {
+        return storedTotalsAround(player.level(), player.blockPosition(), radius);
+    }
+
+    /** Per-item totals in containers around a fixed position. */
+    public static Map<String, Integer> storedTotalsAround(
+            net.minecraft.world.level.Level level, BlockPos origin, int radius) {
         Map<String, Integer> totals = new java.util.HashMap<>();
-        for (Container container : nearbyContainers(player, radius)) {
+        for (Container container : containersAround(level, origin, radius)) {
             for (int slot = 0; slot < container.getContainerSize(); slot++) {
                 ItemStack stack = container.getItem(slot);
                 if (!stack.isEmpty()) {

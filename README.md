@@ -34,7 +34,11 @@ Summary of what works today:
   farms the XP shortfall by mining (slow — low levels only). Full design
   in **[docs/ENCHANTING.md](docs/ENCHANTING.md)**
 - **Hunting**: items no block drops (leather, raw meat) route to a hunt
-  — approach the nearest animal, strike, collect drops
+  — approach the nearest animal, strike, collect drops, always sparing a
+  breeding pair
+- **Farming**: crops are grown, not mined — seeds from grass, craft a
+  hoe, till beside water, sow, ripen, reap. Closes the leather cycle
+  without a village: seeds → wheat → breed cows → leather
 
 Not yet: mob grinders (the realistic route to high XP), bookshelf rings,
 nether/smithing, cave targeting, farms (M10/M11), natural language

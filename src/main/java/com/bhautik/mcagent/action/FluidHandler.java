@@ -32,6 +32,10 @@ public interface FluidHandler {
         @Override public boolean carriesWater() {
             return false;
         }
+
+        @Override public Optional<BlockLocator.BlockSite> nearestPourable(int radius) {
+            return Optional.empty();
+        }
     };
 
     /**
@@ -52,4 +56,16 @@ public interface FluidHandler {
 
     /** True when a filled water bucket is carried. */
     boolean carriesWater();
+
+    /**
+     * Nearest lava source that water can actually be poured onto - one
+     * with a free block above it.
+     *
+     * <p>Plain "nearest lava" returns sources buried under solid rock,
+     * which can never take water. Pouring at those failed silently every
+     * tick, and rejecting them one position at a time just made the
+     * agent oscillate between searching and pouring across a lake where
+     * every block was equally buried.
+     */
+    Optional<BlockLocator.BlockSite> nearestPourable(int radius);
 }

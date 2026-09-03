@@ -34,10 +34,11 @@ master.
 | Restock from base | `/agent restock torches/food/<item>` | ✅ Done | master |
 | Base-supply crediting in plans | goals started at base use stored items | ✅ Done | master |
 | Enchanting E1 XP sensing | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
-| Enchanting E5 enchant goal (acts: item + lapis + table + enchant) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
+| Enchanting E5 enchant goal (acts: item + lapis + table + enchant) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done, verified in-game | feat/enchanting |
 | Enchanting E3 leather (cow hunting) | [ENCHANTING.md](ENCHANTING.md) | ✅ Done | feat/enchanting |
 | Enchanting E2 XP farming | [ENCHANTING.md](ENCHANTING.md) | ✅ Done (ore mining; low levels only) | feat/enchanting |
-| Enchanting E6/E7 (bookshelf ring, villager trading) | [ENCHANTING.md](ENCHANTING.md) | ⬜ Designed, not built | - |
+| Enchanting E6 bookshelf ring (`/agent build enchanting_room`) | [ENCHANTING.md](ENCHANTING.md) | ✅ Built, not yet run in-game | feat/enchanting |
+| Enchanting E7 villager trading (targeted enchants) | [ENCHANTING.md](ENCHANTING.md) | ⬜ Designed, not built | - |
 | M10 Building foundation | §17 M10 | ⬜ Backlog | - |
 | M11 Farm building | §16 UC-11, §17 M11 | ⬜ Backlog | - |
 | M12 Natural language | §18, §17 M12 | ⬜ Backlog | - |
@@ -60,6 +61,10 @@ master.
 /agent enchant <item> [level]        enchant goal: secures item + lapis,
                                      builds a permanent enchanting table
                                      at base, walks back to it, enchants
+/agent build [blueprint]             raise a structure from a blueprint
+                                     (wheat_farm, enchanting_room)
+/agent resume                        pick the last goal back up, or unstick
+                                     a run whose action wedged
 /agent goal                          live goal progress
 /agent cancel                        stop goal + navigation
 ```
@@ -83,6 +88,13 @@ master.
 - Breeding: when the breeding food is carried (wheat for cows/sheep,
   carrots for pigs, seeds for chickens), the plan grows the herd before
   harvesting it
+- Farming: crops are grown, not mined - gather seeds from grass, craft a
+  hoe, walk home, till soil beside water, sow, ripen (bone meal when
+  carried), reap. The plot is base infrastructure like the chest and
+  enchanting table: recorded in BaseSavedState and returned to, not a
+  field left wherever the agent happened to stand. This closes the
+  leather cycle with no village needed:
+  seeds -> wheat -> breed cows -> leather
 - Auto-stash: free slots < 3 mid-goal -> detour to base chest, dump junk
   list, resume
 - Death: goal fails honestly with death location (loot drops vanilla-style)
@@ -98,14 +110,21 @@ master.
   farms the shortfall by mining coal ore. **Ore XP is slow** (level 30 =
   1395 points, roughly a thousand ore blocks), so high level targets give
   up with a progress report rather than digging forever - a mob grinder
-  is the realistic route and is not built. Bookshelf rings are not placed,
-  so offers stay in the low range
-- Hunting roams to find prey and always spares a breeding pair, and it
-  breeds beforehand when the right food is already carried. It is not a
-  closed loop yet: **wheat cannot be grown**, only found (wild wheat is
-  village-farm only), so renewable leather still depends on a wheat
-  supply. Growing crops is the farming milestone (M11)
+  is the realistic route and is not built. `/agent build enchanting_room`
+  raises the 15-shelf ring that lifts offers toward 30, but XP remains
+  the binding constraint
+- Crops grow on the world clock: without bone meal a wheat harvest takes
+  minutes of real time, and the agent waits through it rather than doing
+  other work. Bone meal (when carried) skips the wait
+- Farming needs soil within 4 blocks of water; away from water the plan
+  fails honestly rather than tilling ground that will dry out
 - No pen or enclosure is built; bred animals wander freely
+- Obsidian is MADE reliably (water on lava, water reclaimed afterwards)
+  but HARVESTING it is unreliable: the block forms in the lava surface
+  and navigation often reports "unable to find any path to obsidian".
+  Bridging to an awkward block is not implemented
+- Farming and blueprint building are proof-of-concept: neither has been
+  seen through a full cycle in the client
 - Netherite unreachable (smithing + nether not implemented)
 - Auto-restock before goals is command-driven only (`/agent restock`);
   automatic pre-goal restocking is a future refinement
@@ -128,7 +147,7 @@ master.
 | 5 | M10 Building foundation | blueprint placement + structure verification | M-L | ⬜ |
 | 6 | Kit expansion | gold/mixed kits ("starter kit") | S | ⬜ |
 | 7 | Cave exploration | exposed-ore seeking, y-level targeting | L | ⬜ |
-| 8 | Enchanting | XP tracking + table interaction + book chain; designed in [ENCHANTING.md](ENCHANTING.md), slice E1 (XP sensing + readiness) done | L | 🟡 E1 |
+| 8 | Enchanting | XP tracking + table interaction + book chain; see [ENCHANTING.md](ENCHANTING.md). Verified end to end in-game: obsidian from lava -> table -> enchant | L | ✅ |
 | 9 | Nether progression | portals, fortresses, netherite (UC-10 endgame) | XL | ⬜ |
 | 10 | Natural language | parser/LLM front-end (§18) | L | ⬜ |
 

@@ -13,6 +13,7 @@ import com.bhautik.mcagent.survival.Threat;
 import com.bhautik.mcagent.world.BlockLocator;
 import dev.minecraftai.agent.goal.AgentGoal;
 import dev.minecraftai.agent.goal.AgentGoalManager;
+import dev.minecraftai.agent.goal.BuildGoal;
 import dev.minecraftai.agent.goal.EnchantGoal;
 import dev.minecraftai.agent.goal.ExploreGoal;
 import dev.minecraftai.agent.goal.GetKitGoal;
@@ -56,10 +57,30 @@ public final class GoalService {
     /** Free hotbag slots below which the agent pauses to stash junk. */
     private static final int FREE_SLOT_THRESHOLD = 3;
     /** Items auto-stashed when dumping junk at the base chest. */
+    /**
+     * By-products the agent sheds into the base chest when its bag fills.
+     *
+     * <p>Stashed, never destroyed, so including something useful costs
+     * nothing but a trip to the chest. The lush-cave entries matter now
+     * that obsidian work digs to lava depth: tunnelling through a lush
+     * cave fills the inventory with vines, moss and glow berries, and
+     * anything not listed here cannot be shed at all - the bag stays
+     * full and mined drops stop fitting.
+     */
     private static final List<String> JUNK_ITEMS = List.of(
             "minecraft:cobblestone", "minecraft:dirt", "minecraft:granite",
             "minecraft:diorite", "minecraft:andesite", "minecraft:tuff",
-            "minecraft:cobbled_deepslate", "minecraft:flint");
+            "minecraft:cobbled_deepslate", "minecraft:flint",
+            "minecraft:gravel", "minecraft:sand", "minecraft:calcite",
+            "minecraft:smooth_basalt", "minecraft:clay_ball",
+            // Lush caves, hit on the way down to lava.
+            "minecraft:glow_berries", "minecraft:hanging_roots",
+            "minecraft:rooted_dirt", "minecraft:moss_block",
+            "minecraft:moss_carpet", "minecraft:azalea",
+            "minecraft:flowering_azalea", "minecraft:glow_lichen",
+            "minecraft:small_dripleaf", "minecraft:big_dripleaf",
+            "minecraft:spore_blossom", "minecraft:vine",
+            "minecraft:cave_vines", "minecraft:seagrass");
     /** Chunk radius for vanilla structure searches (16 chunks = 256 blocks). */
     private static final int STRUCTURE_SEARCH_RADIUS_CHUNKS = 16;
     /** Within this distance (squared) of a located structure, we are there. */
@@ -134,9 +155,12 @@ public final class GoalService {
     public String enchant(ServerPlayer player, String rawItemName,
                           Integer requestedLevel) {
         synchronized (monitor) {
+            lastRequest = new LastRequest(RequestKind.ENCHANT, rawItemName, 1,
+                    requestedLevel);
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
             }
+            clearStaleExecutor();
             Optional<MinecraftItem> itemOpt = resolve(rawItemName);
             if (itemOpt.isEmpty()) {
                 return "Invalid item name: " + rawItemName;
@@ -168,18 +192,133 @@ public final class GoalService {
             if (!replan(run)) {
                 return finishWithFailure(run);
             }
+            String immediate = settleImmediateFailure();
+            if (immediate != null) {
+                return immediate;
+            }
+            return goal.progressReport()
+                    + System.lineSeparator() + "Agent is working. Use /agent goal for progress.";
+        }
+    }
+
+    /**
+     * Handles an action that finished the instant it launched.
+     *
+     * <p>A best-effort step failing here must NOT sink the goal - it is
+     * optional by definition, and the plan carries a real alternative
+     * behind it. Breeding failing with no cows around took whole enchant
+     * runs down before this distinction existed.
+     *
+     * @return the goal report when the run really is over, else null
+     */
+    private String settleImmediateFailure() {
+        var finished = executor.pollFinished();
+        while (finished.isPresent()) {
+            AgentAction action = finished.get();
+            if (!action.bestEffort()) {
+                ActiveRun failedRun = run;
+                run = null;
+                failedRun.goal.markFailed(action.failureReason());
+                McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
+                        failedRun.goal.title(), failedRun.goal.failureReason());
+                return failedRun.goal.progressReport();
+            }
+            McAgent.LOGGER.info("[Recovery] Optional step failed at launch; skipping: {} ({})",
+                    action.title(), action.failureReason());
+            if (!launchNextAction()) {
+                break; // the serverTick stall guard closes this out
+            }
+            finished = executor.pollFinished();
+        }
+        return null;
+    }
+
+    /** Blueprint names the agent can build: built-ins plus files on disk. */
+    public Set<String> blueprintNames() {
+        var names = new java.util.TreeSet<>(
+                com.bhautik.mcagent.build.Blueprints.names());
+        names.addAll(com.bhautik.mcagent.integration.NbtBlueprintLoader.available());
+        return names;
+    }
+
+    /**
+     * Build goal: take off the blueprint's materials, gather what is
+     * missing, walk to the site and raise it. A structure file on disk
+     * wins over a built-in of the same name, so designs can be replaced
+     * without touching code.
+     */
+    public String build(ServerPlayer player, String rawName) {
+        synchronized (monitor) {
+            lastRequest = new LastRequest(RequestKind.BUILD, rawName, 1, null);
+            if (goalManager.activeGoal().isPresent()) {
+                return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
+            }
+            clearStaleExecutor();
+            var blueprint = com.bhautik.mcagent.integration.NbtBlueprintLoader
+                    .load(rawName)
+                    .or(() -> com.bhautik.mcagent.build.Blueprints.byName(rawName))
+                    .orElse(null);
+            if (blueprint == null) {
+                return "Invalid blueprint: " + rawName + " (known: "
+                        + blueprintNames() + ")";
+            }
+            MinecraftServer server = player.level().getServer();
+            UUID playerId = player.getUUID();
+            var site = buildSiteFor(server, player, blueprint);
+            if (site == null) {
+                return "Invalid site: no clear "
+                        + blueprint.width() + "x" + blueprint.length()
+                        + " ground within "
+                        + com.bhautik.mcagent.integration.BuildSiteFinder.MAX_RANGE
+                        + " blocks of base that is free of other structures";
+            }
+
+            BuildGoal goal = new BuildGoal(blueprint.describe(),
+                    () -> false, // verified by the build action against the world
+                    () -> blueprint.blockCount());
+            McAgent.LOGGER.info("[Agent] Goal created: {}", goal.title());
+            McAgent.LOGGER.info("[Build] Materials: {}", blueprint.materials());
+            goalManager.register(goal);
+            ActiveRun activeRun = new ActiveRun(goal, null, playerId, 1,
+                    snapshot(player), server, VanillaSurvivalMonitor.monitor(player));
+            activeRun.blueprint = blueprint;
+            activeRun.buildSite = site;
+            run = activeRun;
+            if (!replan(run)) {
+                return finishWithFailure(run);
+            }
             var started = executor.pollFinished();
             if (started.isPresent()) {
                 ActiveRun failedRun = run;
                 run = null;
                 failedRun.goal.markFailed(started.get().failureReason());
-                McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
-                        failedRun.goal.title(), failedRun.goal.failureReason());
                 return failedRun.goal.progressReport();
             }
             return goal.progressReport()
                     + System.lineSeparator() + "Agent is working. Use /agent goal for progress.";
         }
+    }
+
+    /**
+     * Surveys for a site near the base that actually fits the structure:
+     * flat enough, clear of base furniture, and not overlapping anything
+     * already built. Null when nothing suitable is in range, so the goal
+     * can say so rather than bulldozing a spot.
+     */
+    private BlockLocator.BlockSite buildSiteFor(MinecraftServer server,
+                                                ServerPlayer player,
+                                                com.bhautik.mcagent.build.Blueprint blueprint) {
+        if (server == null) {
+            return null;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        int[] anchor = state.anchor();
+        var origin = (anchor[0] == 0 && anchor[1] == 0 && anchor[2] == 0)
+                ? player.blockPosition()
+                : new net.minecraft.core.BlockPos(anchor[0], anchor[1], anchor[2]);
+        return com.bhautik.mcagent.integration.BuildSiteFinder
+                .find(player, blueprint, origin, state.reservations())
+                .orElse(null);
     }
 
     private static String shortName(String itemId) {
@@ -222,9 +361,12 @@ public final class GoalService {
 
     public String getItem(ServerPlayer player, String rawItemName, int requestedCount) {
         synchronized (monitor) {
+            lastRequest = new LastRequest(RequestKind.GET, rawItemName,
+                    requestedCount, null);
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
             }
+            clearStaleExecutor();
             Optional<MinecraftItem> itemOpt = resolve(rawItemName);
             dev.minecraftai.agent.world.InventoryState snapshot = snapshot(player);
             ActiveRun activeRun;
@@ -271,14 +413,9 @@ public final class GoalService {
             }
             // A missing navigation backend fails synchronously; surface it now
             // instead of promising work that already ended.
-            var started = executor.pollFinished();
-            if (started.isPresent()) {
-                ActiveRun failedRun = run;
-                run = null;
-                failedRun.goal.markFailed(started.get().failureReason());
-                McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
-                        failedRun.goal.title(), failedRun.goal.failureReason());
-                return failedRun.goal.progressReport();
+            String immediate = settleImmediateFailure();
+            if (immediate != null) {
+                return immediate;
             }
             return goal.progressReport()
                     + System.lineSeparator() + "Agent is working. Use /agent goal for progress.";
@@ -319,6 +456,7 @@ public final class GoalService {
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
             }
+            clearStaleExecutor();
             String targetBiome = resolveBiome(player.level(), rawBiomeName)
                     .orElseThrow(() -> new IllegalArgumentException("invalid biome"));
             com.bhautik.mcagent.world.BiomeSensor biomeAt = () ->
@@ -342,14 +480,9 @@ public final class GoalService {
             if (!replan(run)) {
                 return finishWithFailure(run);
             }
-            var started = executor.pollFinished();
-            if (started.isPresent()) {
-                ActiveRun failedRun = run;
-                run = null;
-                failedRun.goal.markFailed(started.get().failureReason());
-                McAgent.LOGGER.warn("[Agent] Goal failed immediately: {} ({})",
-                        failedRun.goal.title(), failedRun.goal.failureReason());
-                return failedRun.goal.progressReport();
+            String immediate = settleImmediateFailure();
+            if (immediate != null) {
+                return immediate;
             }
             return goal.progressReport()
                     + System.lineSeparator() + "Agent is exploring. Use /agent goal for progress.";
@@ -362,6 +495,7 @@ public final class GoalService {
             if (goalManager.activeGoal().isPresent()) {
                 return "A goal is already active. Use /agent goal to view it or /agent cancel first.";
             }
+            clearStaleExecutor();
             String tagId = com.bhautik.mcagent.world.StructureDirectory.tagFor(rawName)
                     .orElseThrow(() -> new IllegalArgumentException("unknown structure"));
             var level = (net.minecraft.server.level.ServerLevel) player.level();
@@ -590,6 +724,58 @@ public final class GoalService {
         }
     }
 
+    /** What the player last asked for, so it can be picked up again. */
+    private enum RequestKind { GET, ENCHANT, BUILD }
+
+    private record LastRequest(RequestKind kind, String arg, int count,
+                               Integer level) {
+    }
+
+    private LastRequest lastRequest;
+
+    /**
+     * Picks the last goal back up.
+     *
+     * <p>Re-planning IS resuming: the planner credits whatever the agent
+     * already carries or has stored, so a re-issued goal only does the
+     * work that is still outstanding. That also makes this the way to
+     * unstick a run whose action died quietly - it replans from reality
+     * rather than from where the old plan thought it was.
+     */
+    public String resume(ServerPlayer player) {
+        synchronized (monitor) {
+            ActiveRun activeRun = run;
+            if (activeRun != null && goalManager.activeGoal().isPresent()) {
+                // Still live: replan in place rather than starting over,
+                // so progress and attempt count survive.
+                activeRun.attempts = 0;
+                // Drop whatever is running first. This is the unstick
+                // command, and the executor refuses to launch while busy -
+                // so without this, resuming a wedged action just fails the
+                // goal it was meant to rescue.
+                if (executor.busy()) {
+                    executor.cancelCurrent("resuming goal");
+                }
+                if (!replan(activeRun)) {
+                    return finishWithFailure(activeRun);
+                }
+                McAgent.LOGGER.info("[Agent] Goal resumed: {}", activeRun.goal.title());
+                return "Resumed: " + activeRun.goal.title();
+            }
+            if (lastRequest == null) {
+                return "No previous goal to resume.";
+            }
+            LastRequest again = lastRequest;
+            McAgent.LOGGER.info("[Agent] Re-issuing last goal: {} {}",
+                    again.kind(), again.arg());
+            return switch (again.kind()) {
+                case GET -> getItem(player, again.arg(), again.count());
+                case ENCHANT -> enchant(player, again.arg(), again.level());
+                case BUILD -> build(player, again.arg());
+            };
+        }
+    }
+
     public String cancelActiveGoal() {
         synchronized (monitor) {
             if (run != null) {
@@ -662,7 +848,42 @@ public final class GoalService {
             }
 
             executor.pollFinished().ifPresent(finished -> handleFinishedAction(player, finished));
+
+            // Safety net: a run with nothing executing and nothing queued
+            // will never advance, because everything here is driven by an
+            // action FINISHING. Left alone it stays ACTIVE forever and
+            // blocks every later command with "a goal is already active".
+            if (run != null && !executor.busy() && runQueueIsEmpty(run)) {
+                closeOutStalledRun(player);
+            }
         }
+    }
+
+    /**
+     * Ends or revives a run that has no work in flight. Tries a replan
+     * first - the goal may simply need re-deriving from current state -
+     * and only gives up when that produces nothing either.
+     */
+    private void closeOutStalledRun(ServerPlayer player) {
+        ActiveRun activeRun = run;
+        refreshSnapshot(player);
+        int current = activeRun.item == null ? 0
+                : activeRun.snapshot.count(activeRun.item);
+        if (isSatisfied(activeRun, current)) {
+            activeRun.goal.markSuccess();
+            display(activeRun).finish("Done: " + activeRun.goal.title(), true);
+            McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
+            run = null;
+            return;
+        }
+        if (activeRun.attempts < MAX_PLAN_ATTEMPTS && replan(activeRun)) {
+            McAgent.LOGGER.info("[Recovery] Run had stalled with an empty queue;"
+                    + " replanned");
+            return;
+        }
+        McAgent.LOGGER.warn("[Agent] Goal stalled with nothing left to run: {}",
+                activeRun.goal.title());
+        finishWithFailure(activeRun);
     }
 
     /**
@@ -706,6 +927,7 @@ public final class GoalService {
     private void handleInventoryPressure(ActiveRun activeRun, ServerPlayer player) {
         if (activeRun.stashing || activeRun.recovering || activeRun.securingFood
                 || activeRun.exploreTargetBiome != null || activeRun.stashIds != null
+                || activeRun.stashingIsFutile
                 || baseChestPos(player.level().getServer()) == null) {
             return;
         }
@@ -718,10 +940,15 @@ public final class GoalService {
             }
         }
         if (free > FREE_SLOT_THRESHOLD) {
+            // Space has appeared since a stash came back empty, so the
+            // detour is worth trying again next time it fills up.
+            activeRun.stashingIsFutile = false;
             return;
         }
         McAgent.LOGGER.warn("[Recovery] Inventory almost full ({} free); stashing junk at base",
                 free);
+        display(activeRun).note("Bag nearly full (" + free
+                + " free); detouring to stash junk");
         AgentAction suspended = executor.suspendCurrent("inventory almost full");
         if (suspended != null) {
             activeRun.queue.addFirst(suspended);
@@ -784,6 +1011,7 @@ public final class GoalService {
         activeRun.recovering = true;
         McAgent.LOGGER.warn("[Recovery] Survival interrupt ({}); recovering before resuming",
                 threat.reason());
+        display(activeRun).note("Survival: " + threat.reason());
         launchNextAction();
     }
 
@@ -793,6 +1021,11 @@ public final class GoalService {
             return;
         }
         refreshSnapshot(player);
+        // A build counts only when its own verification pass succeeded.
+        if (finished instanceof com.bhautik.mcagent.action.BuildAction
+                && finished.status() == ActionStatus.SUCCESS) {
+            activeRun.buildVerified = true;
+        }
         int current = activeRun.item == null ? 0
                 : activeRun.snapshot.count(activeRun.item);
         // Reality first (PRD 14): if the goal is already satisfied, no
@@ -803,7 +1036,27 @@ public final class GoalService {
                 // infrastructure, so later enchants walk back to it.
                 rememberEnchantTable(player);
             }
+            if (finished instanceof com.bhautik.mcagent.action.FarmCropAction) {
+                // Same for the crop plot: harvests return to one field.
+                rememberFarmPlot(player);
+            }
+            if (activeRun.blueprint != null && activeRun.buildVerified
+                    && activeRun.blueprint.materials()
+                            .containsKey(com.bhautik.mcagent.planner.Planner
+                                    .ENCHANTING_TABLE_ITEM)) {
+                // A room built around a table IS the enchanting setup, so
+                // record it; otherwise the next enchant ignores the room
+                // it just paid 45 leather for and builds a bare table.
+                rememberEnchantTable(player, true);
+            }
+            if (activeRun.blueprint != null && activeRun.buildSite != null
+                    && activeRun.buildVerified) {
+                // Claim the ground only for a structure that really went
+                // up; reserving failed sites fills the map with ghosts.
+                reserveBuildSite(activeRun);
+            }
             activeRun.goal.markSuccess();
+            display(activeRun).finish("Done: " + activeRun.goal.title(), true);
             McAgent.LOGGER.info("[Agent] Goal completed: {}", activeRun.goal.title());
             run = null;
             return;
@@ -824,6 +1077,17 @@ public final class GoalService {
             if (finished.status() == ActionStatus.SUCCESS) {
                 activeRun.needsEmergencyFood = false;
                 activeRun.securingFood = false;
+            }
+            // A stash that freed nothing must not be tried again: the
+            // trigger condition is unchanged, so it re-fires immediately
+            // and the goal livelocks instead of progressing.
+            if (activeRun.stashing
+                    && finished instanceof com.bhautik.mcagent.action.DepositAction deposit
+                    && deposit.storedStacks() == 0) {
+                activeRun.stashingIsFutile = true;
+                McAgent.LOGGER.warn("[Recovery] Nothing in the bag is on the junk list;"
+                        + " carrying on with a full inventory");
+                display(activeRun).note("Nothing to stash; continuing with a full bag");
             }
             activeRun.stashing = false;
             McAgent.LOGGER.info("[Recovery] Survival step finished ({}); resuming plan",
@@ -900,6 +1164,13 @@ public final class GoalService {
                     liveCountById(activeRun.server, activeRun.playerId, piece.id())
                             >= activeRun.requested);
         }
+        if (activeRun.blueprint != null) {
+            // Only a build that actually verified counts. An empty queue
+            // says the action STOPPED, not that it worked - a failed build
+            // empties the queue too, and reporting that as success also
+            // reserved ground for a structure that was never raised.
+            return activeRun.buildVerified;
+        }
         if (activeRun.enchantItemId != null) {
             // Carrying the item is not the goal - carrying an ENCHANTED one
             // is. The generic count check below is true from the start,
@@ -925,6 +1196,23 @@ public final class GoalService {
     }
 
     /** Plans from scratch and fills the run's action queue. */
+    /**
+     * Drops an action left running by a dead goal.
+     *
+     * <p>The executor holds one action at a time and refuses to launch
+     * while busy. An action orphaned by a run that ended - or stopped
+     * behind our back, e.g. by Baritone's own cancel - therefore blocks
+     * every future goal, and the failure surfaces as the misleading
+     * "could not start any planned action".
+     */
+    private void clearStaleExecutor() {
+        if (run == null && executor.busy()) {
+            McAgent.LOGGER.info("[Recovery] Clearing an action left over from a"
+                    + " finished goal before starting a new one");
+            executor.cancelCurrent("previous goal ended");
+        }
+    }
+
     private boolean replan(ActiveRun activeRun) {
         // Reset pipeline flags first; planFor re-secures food if needed.
         activeRun.recovering = false;
@@ -936,6 +1224,9 @@ public final class GoalService {
         activeRun.attempts++;
         activeRun.queue.clear();
         activeRun.queue.addAll(actions);
+        activeRun.planSize = actions.size();
+        display(activeRun).note("Planned " + actions.size() + " steps for "
+                + activeRun.goal.title());
         return launchNextAction();
     }
 
@@ -944,7 +1235,39 @@ public final class GoalService {
         if (activeRun == null || activeRun.queue.isEmpty()) {
             return false;
         }
-        return executor.launch(activeRun.queue.poll());
+        AgentAction next = activeRun.queue.poll();
+        boolean launched = executor.launch(next);
+        if (launched) {
+            // Surface every step on screen as it starts; the boss bar is
+            // the only place a live agent's progress is actually legible.
+            int remaining = activeRun.queue.size();
+            int total = Math.max(activeRun.planSize, remaining + 1);
+            display(activeRun).showGoal(activeRun.goal.title(), next.title(),
+                    total - remaining - 1, total);
+        }
+        return launched;
+    }
+
+    /**
+     * Status display for the run's player, created once and reused.
+     * Building a fresh one per update re-registered the boss bar every
+     * tick, which is both wasteful and makes it flicker.
+     */
+    private com.bhautik.mcagent.action.AgentStatusDisplay display(ActiveRun activeRun) {
+        if (activeRun.statusDisplay != null) {
+            return activeRun.statusDisplay;
+        }
+        if (activeRun.server == null) {
+            return com.bhautik.mcagent.action.AgentStatusDisplay.NONE;
+        }
+        ServerPlayer player = activeRun.server.getPlayerList()
+                .getPlayer(activeRun.playerId);
+        if (player == null) {
+            return com.bhautik.mcagent.action.AgentStatusDisplay.NONE;
+        }
+        activeRun.statusDisplay =
+                com.bhautik.mcagent.integration.VanillaStatusDisplay.forPlayer(player);
+        return activeRun.statusDisplay;
     }
 
     private List<AgentAction> planFor(ActiveRun activeRun) {
@@ -974,17 +1297,52 @@ public final class GoalService {
                     demanded);
             var usefulSupplies = relevantSupplies(baseSupplies, demanded);
             if (!usefulSupplies.isEmpty()) {
-                actions.addAll(0, java.util.List.of(supplyWithdrawStep(player, usefulSupplies)));
+                actions.addAll(0, supplyCollectionSteps(player, usefulSupplies));
                 McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
             }
             McAgent.LOGGER.info("[Planner] Kit plan generated: {}",
                     actions.stream().map(AgentAction::title).toList());
             return actions;
         }
+        if (activeRun.blueprint != null) {
+            var collected = InventoryState.collect(player).itemCounts();
+            var countsNow = new java.util.HashMap<>(collected);
+            // Materials sitting in the base chest count as owned, so the
+            // build withdraws them instead of mining fresh ones.
+            var baseSupplies = baseSuppliesFor(player);
+            for (var entry : baseSupplies.entrySet()) {
+                countsNow.merge(entry.getKey(), entry.getValue(), Integer::sum);
+            }
+            var environment = environmentFor(activeRun, player, countsNow);
+            var demanded = new java.util.LinkedHashSet<String>();
+            List<AgentAction> actions = executor.planner().planBuild(
+                    environment.resolver(),
+                    id -> countsNow.getOrDefault(id, 0),
+                    countsNow.keySet(),
+                    itemId -> liveCountById(activeRun.server, activeRun.playerId, itemId),
+                    environment, activeRun.blueprint, activeRun.buildSite, demanded);
+            var usefulSupplies = relevantSupplies(baseSupplies, demanded);
+            if (!usefulSupplies.isEmpty()) {
+                actions.addAll(0, supplyCollectionSteps(player, usefulSupplies));
+                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
+            }
+            McAgent.LOGGER.info("[Planner] Build plan generated: {}",
+                    actions.stream().map(AgentAction::title).toList());
+            return actions;
+        }
         if (activeRun.enchantItemId != null) {
-            var countsNow = InventoryState.collect(player).itemCounts();
+            var collected = InventoryState.collect(player).itemCounts();
+            var countsNow = new java.util.HashMap<>(collected);
+            // Stored materials count as owned here too. Without this the
+            // agent hunted cows and mined obsidian it already had sitting
+            // in the base chest.
+            var baseSupplies = baseSuppliesFor(player);
+            for (var entry : baseSupplies.entrySet()) {
+                countsNow.merge(entry.getKey(), entry.getValue(), Integer::sum);
+            }
             var environment = environmentFor(activeRun, player, countsNow);
             String target = activeRun.enchantItemId;
+            var demanded = new java.util.LinkedHashSet<String>();
             List<AgentAction> actions = executor.planner().planEnchant(
                     environment.resolver(),
                     id -> countsNow.getOrDefault(id, 0),
@@ -996,7 +1354,13 @@ public final class GoalService {
                     () -> enchantedCountById(activeRun.server, activeRun.playerId, target),
                     target,
                     activeRun.enchantMinLevel,
-                    enchantingSiteFor(activeRun.server));
+                    enchantingSiteFor(activeRun.server),
+                    demanded);
+            var usefulSupplies = relevantSupplies(baseSupplies, demanded);
+            if (!usefulSupplies.isEmpty()) {
+                actions.addAll(0, supplyCollectionSteps(player, usefulSupplies));
+                McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
+            }
             McAgent.LOGGER.info("[Planner] Enchant plan generated: {}",
                     actions.stream().map(AgentAction::title).toList());
             return actions;
@@ -1097,8 +1461,7 @@ public final class GoalService {
                     demanded);
             var usefulSupplies = relevantSupplies(baseSupplies, demanded);
             if (!usefulSupplies.isEmpty()) {
-                actions.addAll(0, java.util.List.of(
-                        supplyWithdrawStep(player, usefulSupplies)));
+                actions.addAll(0, supplyCollectionSteps(player, usefulSupplies));
                 McAgent.LOGGER.info("[Planner] Base supplies credited: {}", usefulSupplies);
             }
             if (activeRun.needsEmergencyFood) {
@@ -1172,8 +1535,43 @@ public final class GoalService {
         return new BlockLocator.BlockSite(anchor[0], anchor[1], anchor[2]);
     }
 
-    /** Remembers a freshly built enchanting table as base infrastructure. */
-    private void rememberEnchantTable(ServerPlayer player) {
+    /**
+     * Where crops get grown: the plot already tilled at base if there is
+     * one, otherwise the base anchor so a new farm is started at home
+     * rather than wherever the agent happened to be standing.
+     */
+    private BlockLocator.BlockSite farmSiteFor(MinecraftServer server) {
+        if (server == null) {
+            return null;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        int[] farm = state.farm();
+        if (farm != null) {
+            return new BlockLocator.BlockSite(farm[0], farm[1], farm[2]);
+        }
+        int[] anchor = state.anchor();
+        if (anchor[0] == 0 && anchor[1] == 0 && anchor[2] == 0) {
+            return null; // no base set yet
+        }
+        return new BlockLocator.BlockSite(anchor[0], anchor[1], anchor[2]);
+    }
+
+    /** Records the ground a finished structure occupies, with dimensions. */
+    private void reserveBuildSite(ActiveRun activeRun) {
+        if (activeRun.server == null) {
+            return;
+        }
+        var site = activeRun.buildSite;
+        var reservation = com.bhautik.mcagent.build.Reservation.centredOn(
+                activeRun.blueprint.name(), activeRun.blueprint,
+                site.x(), site.y(), site.z());
+        com.bhautik.mcagent.integration.BaseSavedState.get(activeRun.server)
+                .reserve(reservation);
+        McAgent.LOGGER.info("[Build] Reserved {}", reservation.describe());
+    }
+
+    /** Remembers the crop plot so later harvests return to the same field. */
+    private void rememberFarmPlot(ServerPlayer player) {
         if (player == null) {
             return;
         }
@@ -1182,7 +1580,36 @@ public final class GoalService {
             return;
         }
         var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
-        if (state.hasEnchantTable()) {
+        if (state.hasFarm()) {
+            return;
+        }
+        var pos = player.blockPosition();
+        state.setFarm(pos.getX(), pos.getY(), pos.getZ());
+        McAgent.LOGGER.info("[Agent] Farm plot recorded at {} {} {}",
+                pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    /** Remembers a freshly built enchanting table as base infrastructure. */
+    private void rememberEnchantTable(ServerPlayer player) {
+        rememberEnchantTable(player, false);
+    }
+
+    /**
+     * @param replaceExisting true when a purpose-built enchanting room
+     *        should supersede an earlier bare table - otherwise the agent
+     *        keeps walking to the old one and the room's bookshelves
+     *        never raise a single offer
+     */
+    private void rememberEnchantTable(ServerPlayer player, boolean replaceExisting) {
+        if (player == null) {
+            return;
+        }
+        var server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        var state = com.bhautik.mcagent.integration.BaseSavedState.get(server);
+        if (state.hasEnchantTable() && !replaceExisting) {
             return;
         }
         com.bhautik.mcagent.integration.VanillaPlacementExecutor
@@ -1197,9 +1624,24 @@ public final class GoalService {
                 });
     }
 
+    /**
+     * What the base chest holds, read from its RECORDED position rather
+     * than from wherever the agent is standing.
+     *
+     * <p>This used to scan 4 blocks around the player, so stored stock
+     * was only ever credited while the agent happened to be standing on
+     * the chest. Every plan started away from base re-gathered materials
+     * it already owned - hunting cows for leather that was in the box.
+     */
     private Map<String, Integer> baseSuppliesFor(ServerPlayer player) {
-        return com.bhautik.mcagent.integration.VanillaStorage.storedTotals(
-                player, com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS);
+        var server = player.level().getServer();
+        var chest = baseChestPos(server);
+        if (chest == null) {
+            return Map.of();
+        }
+        return com.bhautik.mcagent.integration.VanillaStorage.storedTotalsAround(
+                player.level(), chest,
+                com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS);
     }
 
     private AgentAction supplyWithdrawStep(ServerPlayer player,
@@ -1224,6 +1666,37 @@ public final class GoalService {
                 com.bhautik.mcagent.integration.VanillaStorage.supplyWithdrawer(
                         player, com.bhautik.mcagent.integration.VanillaPlacementExecutor.INTERACTION_RADIUS,
                         capped));
+    }
+
+    /**
+     * Walk-to-chest plus the collect step. Credit is read from the base
+     * chest wherever the agent is, so the plan MUST travel there before
+     * withdrawing - otherwise it collects nothing and carries on
+     * believing it owns materials that are still in the box.
+     */
+    private List<AgentAction> supplyCollectionSteps(ServerPlayer player,
+            Map<String, Integer> supplies) {
+        List<AgentAction> steps = new ArrayList<>();
+        var chest = baseChestPos(player.level().getServer());
+        if (chest != null) {
+            var approach = com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                    .findApproachSpot(player, chest);
+            var target = approach != null ? approach : chest;
+            if (player.blockPosition().distSqr(target)
+                    > com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                            .INTERACTION_RADIUS
+                    * com.bhautik.mcagent.integration.VanillaPlacementExecutor
+                            .INTERACTION_RADIUS) {
+                steps.add(new com.bhautik.mcagent.action.MoveAction("base chest",
+                        target.getX(), target.getY(), target.getZ(),
+                        4.0 * 4.0,
+                        () -> player.distanceToSqr(target.getX(), target.getY(),
+                                target.getZ()),
+                        executor.baritoneIntegration()));
+            }
+        }
+        steps.add(supplyWithdrawStep(player, supplies));
+        return steps;
     }
 
     /** Builds the full execution seam bundle against live world state. */
@@ -1254,6 +1727,10 @@ public final class GoalService {
                         .map(key -> key.identifier().toString()).orElse(""),
                 new com.bhautik.mcagent.world.PositionAnchor() {
                     @Override public int x() { return player.blockPosition().getX(); }
+                    // Tracked: obsidian-making needs depth to know whether
+                    // it is still on the surface, and the default is
+                    // Integer.MIN_VALUE, which reads as "already deep".
+                    @Override public int y() { return player.blockPosition().getY(); }
                     @Override public int z() { return player.blockPosition().getZ(); }
                 },
                 com.bhautik.mcagent.integration.VanillaEquipment.equipper(player),
@@ -1267,7 +1744,10 @@ public final class GoalService {
                                 com.bhautik.mcagent.planner.Planner.OBSIDIAN_ITEM,
                                 com.bhautik.mcagent.action.MakeObsidianAction.SEARCH_RADIUS),
                 blockId -> com.bhautik.mcagent.integration.VanillaPlacementExecutor
-                        .blockCount(player, blockId, VEIN_SCAN_RADIUS));
+                        .blockCount(player, blockId, VEIN_SCAN_RADIUS),
+                com.bhautik.mcagent.integration.VanillaFarmer.farmer(player),
+                farmSiteFor(activeRun.server),
+                com.bhautik.mcagent.integration.VanillaStructureBuilder.builder(player));
     }
 
     /**
@@ -1301,8 +1781,11 @@ public final class GoalService {
     }
 
     private String finishWithFailure(ActiveRun activeRun) {
+        display(activeRun).finish("Failed: " + activeRun.goal.title()
+                + (activeRun.goal.failureReason() == null ? ""
+                        : " - " + activeRun.goal.failureReason()), false);
         activeRun.goal.markFailed(executor.baritoneIntegration().available()
-                ? "planning produced no executable actions"
+                ? "could not start any planned action"
                 : "no navigation backend available");
         McAgent.LOGGER.warn("[Agent] Goal failed: {} ({})",
                 activeRun.goal.title(), activeRun.goal.failureReason());
@@ -1411,10 +1894,25 @@ public final class GoalService {
         /** Non-null for restock runs: the ids pulled from the chest. */
         List<String> restockIds;
         int restockMaxStacks;
+        /** Steps in the current plan, for on-screen progress. */
+        int planSize;
+        /** Created once so the boss bar stays put instead of flickering. */
+        com.bhautik.mcagent.action.AgentStatusDisplay statusDisplay;
         /** True while an auto-stash detour is in the pipeline. */
         boolean stashing;
+        /**
+         * Set when a stash freed no slots, so the detour is not retried
+         * on an unchanged inventory. Cleared once space appears.
+         */
+        boolean stashingIsFutile;
         /** Non-null while a hostile is being fought. */
         String combatTarget;
+        /** Non-null for build runs: the structure to raise. */
+        com.bhautik.mcagent.build.Blueprint blueprint;
+        /** Where a build run puts the structure. */
+        BlockLocator.BlockSite buildSite;
+        /** Set only when the build action verified the finished structure. */
+        boolean buildVerified;
         /** Non-null for enchant runs: the item id to enchant. */
         String enchantItemId;
         /** Lowest acceptable offer level for an enchant run. */

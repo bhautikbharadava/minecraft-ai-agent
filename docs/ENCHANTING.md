@@ -265,7 +265,7 @@ behind existing `MoveAction`/`BaritoneIntegration`.
 | **E3** ✅ | Cow-hunting leather acquisition (`Hunter` seam + `MobDrops` + `HuntAction`) | — | smoke: `get leather N` plans one hunt; `book` chain hunts + crafts |
 | **E4** | Table provisioning (constant + `Environment` field + `planBlockAccess` + collect) | E3 | smoke: `get enchanting_table 1` full chain from bare hands |
 | **E5** | `EnchantAction` + `VanillaEnchanter` + `EnchantGoal` + command; end-to-end enchant at available level | E2, E4 | smoke: enchant plan ordering; in-game manual check |
-| **E6** | Bookshelf ring for level-30 enchants | E5 | in-game: 15-shelf placement + level-30 offer |
+| **E6** ✅ | Bookshelf ring as a blueprint (`enchanting_room`) | E5 | smoke: 15 shelves at radius 2, radius-1 gaps cleared |
 | **E7** *(future)* | Villager trading alternative for leather / enchanted books | E5 | — |
 
 Recommended: build **E1 → E3** first (both self-contained, no XP/menu
