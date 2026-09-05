@@ -49,6 +49,36 @@ instance. Add a `validateX()` for new planner/goal behavior and register
 it in `main`. Note `assertEquals` compares by reference — use
 `assertIntEquals` for numbers.
 
+### Every long-running action needs a stall scenario
+
+`validateNoStalls` drives each tick-based action against seams that
+refuse everything and asserts it either reaches a terminal state or
+changes something observable. **Add a scenario for any new action that
+runs across ticks.**
+
+This is the project's most expensive bug class, by a wide margin. Every
+instance had the same shape: a per-tick operation that can fail forever,
+with the give-up clock reset by the failure loop itself. Hunting
+restarted its roam every tick so the timeout never advanced; a stash
+that freed nothing re-triggered three times a second; obsidian flapped
+between SEEKING and POURING; farming looped TILLING → SOWING → GROWING →
+TILLING. None of them needed a running game to catch — only this
+assertion, which none of them survive.
+
+Two rules that follow from it:
+
+- **A phase/flag change that resets a timeout must be counted.** If two
+  states can hand off to each other, cap the number of switches, and
+  keep a total budget that no transition resets.
+- **A failing operation needs a way to conclude the target is
+  impossible**, not just a retry limit — rejecting one buried lava
+  source at a time never helped, because every block of a covered lake
+  is buried.
+
+The harness self-checks: a deliberately spinning action must be caught,
+and the build fails if it is not. A harness that cannot fail is worse
+than none, because it reads as evidence while checking nothing.
+
 ## Architecture rules
 
 - **Framework-free cores + seam adapters.** Planner/goal/action logic

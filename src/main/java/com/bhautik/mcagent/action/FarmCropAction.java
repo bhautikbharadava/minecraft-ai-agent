@@ -26,6 +26,16 @@ public final class FarmCropAction implements AgentAction {
     /** Ticks for the shorter, mechanical phases. */
     public static final int PHASE_TIMEOUT_TICKS = 20 * 45;
     /**
+     * Phase switches allowed before the action admits it is going in
+     * circles. Every phase change resets the per-phase clock, so a cycle
+     * of them would otherwise never time out - tilling and sowing can
+     * both report success while no crop ever registers, and the action
+     * loops TILLING -> SOWING -> GROWING -> TILLING forever.
+     */
+    public static final int MAX_PHASE_CHANGES = 24;
+    /** Hard ceiling on the whole attempt, whatever the phases do. */
+    public static final int TOTAL_TIMEOUT_TICKS = 20 * 60 * 12;
+    /**
      * Half-width of the field tilled around the chosen spot. Four keeps
      * every block inside vanilla's hydration range of the water it was
      * sited next to, so the farmland does not dry out.
@@ -49,6 +59,8 @@ public final class FarmCropAction implements AgentAction {
     private int baseline;
     private int sown;
     private int phaseTicks;
+    private int totalTicks;
+    private int phaseChanges;
     private BlockLocator.BlockSite plot;
 
     public FarmCropAction(String cropBlockId, String seedItemId, int targetCount,
@@ -106,6 +118,12 @@ public final class FarmCropAction implements AgentAction {
             status = ActionStatus.SUCCESS;
             McAgent.LOGGER.info("[Action] Verified success: {} (inventory {})",
                     title, liveCropCount.getAsInt());
+            return;
+        }
+        if (++totalTicks > TOTAL_TIMEOUT_TICKS) {
+            navigation.stop();
+            fail("farming made no progress within "
+                    + (TOTAL_TIMEOUT_TICKS / 20 / 60) + " minutes");
             return;
         }
         phaseTicks++;
@@ -206,6 +224,13 @@ public final class FarmCropAction implements AgentAction {
     }
 
     private void enter(Phase next) {
+        if (++phaseChanges > MAX_PHASE_CHANGES) {
+            navigation.stop();
+            fail("stopped making progress (cycled between " + phase + " and "
+                    + next + "); tilling and sowing report success but no crop"
+                    + " is taking hold here");
+            return;
+        }
         phase = next;
         phaseTicks = 0;
         McAgent.LOGGER.info("[Action] {} -> {}", title, next);

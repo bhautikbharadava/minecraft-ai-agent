@@ -41,6 +41,7 @@ public final class AgentCli {
             validateSurvivalInterruptions();
             validateExploration();
             validateXpSensing();
+            validateNoStalls();
             validateHunting();
             return;
         }
@@ -958,6 +959,269 @@ public final class AgentCli {
      * acquisition strategy" — which is what blocked the enchanting-table
      * chain before cow hunting existed.
      */
+
+    /**
+     * Ticks an action hard and insists it either finishes or gets
+     * somewhere.
+     *
+     * <p>Every expensive bug this project has hit at runtime was the same
+     * shape: a per-tick operation that could fail forever, with the
+     * give-up clock reset by the failure loop itself. Roaming restarted
+     * every tick so its timeout never advanced; a stash that freed
+     * nothing re-triggered three times a second; obsidian flapped between
+     * SEEKING and POURING; pouring retried one buried lava source
+     * indefinitely. None needed a running game to catch - only this
+     * assertion, which none of them survive.
+     *
+     * <p>"Progress" is deliberately weak: any observable change counts.
+     * The bar is not that the action succeeds, only that it is not
+     * spinning in place.
+     *
+     * @param progress observable state; a stalled action leaves this
+     *                 unchanged for the whole window
+     */
+    private static void assertMakesProgressOrStops(String label,
+            com.bhautik.mcagent.action.AgentAction action,
+            java.util.function.Supplier<Object> progress) {
+        int budget = 20 * 60 * 12; // longer than any action's own timeout
+        Object seen = progress.get();
+        int sinceChange = 0;
+        action.start();
+        for (int tick = 0; tick < budget; tick++) {
+            if (action.status().terminal()) {
+                return; // finished, pass or fail - either is honest
+            }
+            action.tick();
+            Object now = progress.get();
+            if (!java.util.Objects.equals(now, seen)) {
+                seen = now;
+                sinceChange = 0;
+            } else {
+                sinceChange++;
+            }
+        }
+        throw new IllegalStateException(label + " never stopped and never"
+                + " progressed: ran " + budget + " ticks still "
+                + action.status() + " (" + sinceChange
+                + " ticks since anything changed). This is the stall shape -"
+                + " a failure path with no way out.");
+    }
+
+    /**
+     * Long-running actions, driven against seams that never cooperate.
+     * The world says no to everything, which is exactly the case where a
+     * missing escape hatch shows up.
+     */
+    private static void validateNoStalls() {
+        // Prove the detector detects. A harness that cannot fail is worse
+        // than none, because it reads as evidence while checking nothing.
+        var spinner = new com.bhautik.mcagent.action.AgentAction() {
+            private com.bhautik.mcagent.action.ActionStatus status =
+                    com.bhautik.mcagent.action.ActionStatus.PENDING;
+            @Override public String title() { return "deliberate stall"; }
+            @Override public com.bhautik.mcagent.action.ActionStatus status() {
+                return status;
+            }
+            @Override public void start() {
+                status = com.bhautik.mcagent.action.ActionStatus.RUNNING;
+            }
+            @Override public void tick() { /* forever, changing nothing */ }
+            @Override public void cancel() { }
+            @Override public String failureReason() { return null; }
+        };
+        boolean caught = false;
+        try {
+            assertMakesProgressOrStops("self-check", spinner, () -> 0);
+        } catch (IllegalStateException expected) {
+            caught = true;
+        }
+        if (!caught) {
+            throw new IllegalStateException(
+                    "the stall harness failed to catch a deliberate stall;"
+                            + " every result it reports is meaningless");
+        }
+
+        var nowhere = new FakeBackend();
+
+        // Hunting with no animals anywhere: must exhaust its roam and stop.
+        var barrenHunter = new com.bhautik.mcagent.action.Hunter() {
+            @Override public Optional<MobSite> nearest(String mob, int radius) {
+                return Optional.empty();
+            }
+            @Override public boolean strike(String mob, double reach) {
+                return false;
+            }
+            @Override public int countNearby(String mob, int radius) {
+                return 0;
+            }
+        };
+        assertMakesProgressOrStops("hunt with no prey",
+                new com.bhautik.mcagent.action.HuntAction("minecraft:cow",
+                        "minecraft:leather", 3, () -> 0, barrenHunter, nowhere,
+                        anchorAt(0, 64, 0)),
+                () -> 0);
+
+        // Hunting a herd that is all breeding stock: the spare-the-pair
+        // path must not become an endless search either.
+        var sparedOnly = new com.bhautik.mcagent.action.Hunter() {
+            @Override public Optional<MobSite> nearest(String mob, int radius) {
+                return Optional.of(new MobSite(1, 64, 1));
+            }
+            @Override public boolean strike(String mob, double reach) {
+                return false;
+            }
+            @Override public int countNearby(String mob, int radius) {
+                return com.bhautik.mcagent.action.HuntAction.BREEDING_STOCK;
+            }
+        };
+        assertMakesProgressOrStops("hunt with only breeding stock",
+                new com.bhautik.mcagent.action.HuntAction("minecraft:cow",
+                        "minecraft:leather", 3, () -> 0, sparedOnly, new FakeBackend(),
+                        anchorAt(0, 64, 0)),
+                () -> 0);
+
+        // Obsidian where every lava source refuses the pour.
+        var stubbornLava = new com.bhautik.mcagent.action.FluidHandler() {
+            @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
+                    nearest(String fluidId, int radius) {
+                return Optional.of(new com.bhautik.mcagent.world.BlockLocator
+                        .BlockSite(0, 64, 0));
+            }
+            @Override public boolean fillFrom(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite site) {
+                return true;
+            }
+            @Override public boolean pourOnto(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite site) {
+                return false; // buried: never works, however often we try
+            }
+            @Override public boolean carriesWater() {
+                return true;
+            }
+            @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
+                    nearestPourable(int radius) {
+                return Optional.of(new com.bhautik.mcagent.world.BlockLocator
+                        .BlockSite(0, 64, 0));
+            }
+        };
+        assertMakesProgressOrStops("obsidian on unpourable lava",
+                new com.bhautik.mcagent.action.MakeObsidianAction(4, () -> 0,
+                        stubbornLava, new FakeBackend(), (x, y, z) -> 0.0,
+                        anchorAt(0, 11, 0)),
+                () -> 0);
+
+        // Farming where the ground can never be worked.
+        var barrenFarmer = new com.bhautik.mcagent.action.Farmer() {
+            @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
+                    tillableSpot(int radius) {
+                return Optional.of(new com.bhautik.mcagent.world.BlockLocator
+                        .BlockSite(0, 64, 0));
+            }
+            @Override public int tillPlot(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite c, int r) {
+                return 0;
+            }
+            @Override public int sowAll(String seedItemId, int radius) {
+                return 0;
+            }
+            @Override public int cropsPlanted(String cropBlockId, int radius) {
+                return 0;
+            }
+            @Override public int cropsRipe(String cropBlockId, int radius) {
+                return 0;
+            }
+            @Override public boolean hurryGrowth(String cropBlockId, int radius) {
+                return false;
+            }
+            @Override public int harvestRipe(String cropBlockId, int radius) {
+                return 0;
+            }
+        };
+        assertMakesProgressOrStops("farming unworkable ground",
+                new com.bhautik.mcagent.action.FarmCropAction("minecraft:wheat",
+                        "minecraft:wheat_seeds", 2, () -> 0, barrenFarmer,
+                        new FakeBackend()),
+                () -> 0);
+
+        // Farming where tilling and sowing both "work" but no crop ever
+        // registers. This is the oscillation shape: TILLING -> SOWING ->
+        // GROWING -> back to TILLING, with the phase clock reset each hop.
+        var forgetfulFarmer = new com.bhautik.mcagent.action.Farmer() {
+            @Override public Optional<com.bhautik.mcagent.world.BlockLocator.BlockSite>
+                    tillableSpot(int radius) {
+                return Optional.of(new com.bhautik.mcagent.world.BlockLocator
+                        .BlockSite(0, 64, 0));
+            }
+            @Override public int tillPlot(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite c, int r) {
+                return 5; // tilling always "succeeds"
+            }
+            @Override public int sowAll(String seedItemId, int radius) {
+                return 5; // sowing always "succeeds"
+            }
+            @Override public int cropsPlanted(String cropBlockId, int radius) {
+                return 0; // ...but nothing is ever actually growing
+            }
+            @Override public int cropsRipe(String cropBlockId, int radius) {
+                return 0;
+            }
+            @Override public boolean hurryGrowth(String cropBlockId, int radius) {
+                return false;
+            }
+            @Override public int harvestRipe(String cropBlockId, int radius) {
+                return 0;
+            }
+        };
+        assertMakesProgressOrStops("farming where crops never register",
+                new com.bhautik.mcagent.action.FarmCropAction("minecraft:wheat",
+                        "minecraft:wheat_seeds", 2, () -> 0, forgetfulFarmer,
+                        new FakeBackend()),
+                () -> 0);
+
+        // Building where nothing can be placed and nothing is reachable.
+        var refusingBuilder = new com.bhautik.mcagent.action.StructureBuilder() {
+            @Override public boolean place(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite at, String id) {
+                return false;
+            }
+            @Override public boolean clear(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite at) {
+                return false;
+            }
+            @Override public String blockAt(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite at) {
+                return "minecraft:stone";
+            }
+            @Override public boolean isProtected(
+                    com.bhautik.mcagent.world.BlockLocator.BlockSite at) {
+                return false;
+            }
+        };
+        assertMakesProgressOrStops("build that can place nothing",
+                new com.bhautik.mcagent.action.BuildAction(
+                        com.bhautik.mcagent.build.Blueprints.wheatFarm(),
+                        new com.bhautik.mcagent.world.BlockLocator.BlockSite(0, 64, 0),
+                        refusingBuilder, new FakeBackend(), (x, y, z) -> 999.0),
+                () -> 0);
+
+        // XP farming that never earns a level.
+        assertMakesProgressOrStops("xp farm that earns nothing",
+                new com.bhautik.mcagent.action.XpFarmAction("minecraft:coal_ore", 10,
+                        com.bhautik.mcagent.world.XpSensor.NONE, new FakeBackend(),
+                        anchorAt(0, 64, 0)),
+                () -> 0);
+    }
+
+    /** A fixed position, for actions that centre their search on one. */
+    private static com.bhautik.mcagent.world.PositionAnchor anchorAt(int x, int y,
+                                                                     int z) {
+        return new com.bhautik.mcagent.world.PositionAnchor() {
+            @Override public int x() { return x; }
+            @Override public int y() { return y; }
+            @Override public int z() { return z; }
+        };
+    }
+
     private static void validateHunting() {
         com.bhautik.mcagent.planner.Planner planner =
                 new com.bhautik.mcagent.planner.Planner(new FakeBackend());
